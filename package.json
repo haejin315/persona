@@ -1,0 +1,24 @@
+{
+  "name": "persona",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI character chat engine with an evaluation pipeline for long-conversation consistency",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "chat": "npm run chat -w @persona/engine --",
+    "typecheck": "tsc --noEmit -p packages/engine && tsc --noEmit -p packages/eval",
+    "test": "vitest run",
+    "econ": "tsx scripts/unit-economics.ts",
+    "eval": "tsx packages/eval/src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

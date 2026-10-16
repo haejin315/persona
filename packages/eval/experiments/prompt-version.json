@@ -1,0 +1,14 @@
+{
+  "scenarioIds": ["haru-ko", "kael-ko"],
+  "arms": [
+    { "id": "v1-flat/gpt-5-mini", "promptVersion": "v1-flat", "model": "openai:gpt-5-mini" },
+    { "id": "v2-structured/gpt-5-mini", "promptVersion": "v2-structured", "model": "openai:gpt-5-mini" }
+  ],
+  "userTurns": 50,
+  "simulatorModel": "openai:gpt-5-mini",
+  "memoryModel": "gpt-5-nano",
+  "repeats": 2,
+  "judgeModel": "claude-cli:sonnet",
+  "maxUsd": 3,
+  "outDir": "eval-results/prompt-version"
+}

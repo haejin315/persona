@@ -1,0 +1,12 @@
+{
+  "scenarioIds": ["haru-ko", "kael-ko"],
+  "arms": [
+    { "id": "v2-fake-replay", "promptVersion": "v2-structured", "model": "fake" }
+  ],
+  "userTurns": 12,
+  "repeats": 1,
+  "replayFrom": "eval-results/smoke",
+  "replayArmId": "v1-fake",
+  "judgeModel": "fake",
+  "outDir": "eval-results/smoke-replay"
+}

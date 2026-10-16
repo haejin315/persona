@@ -1,0 +1,11 @@
+{
+  "scenarioIds": ["haru-ko", "kael-ko"],
+  "arms": [
+    { "id": "v1-fake", "promptVersion": "v1-flat", "model": "fake" },
+    { "id": "v2-fake", "promptVersion": "v2-structured", "model": "fake" }
+  ],
+  "userTurns": 12,
+  "simulatorModel": "fake",
+  "repeats": 1,
+  "outDir": "eval-results/smoke"
+}

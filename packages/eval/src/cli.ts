@@ -1,0 +1,161 @@
+/**
+ *   npm run eval -- estimate experiments/prompt-version.json [--judge spec] [--from <outDir>]
+ *   npm run eval -- run      experiments/smoke.json          # generate conversations
+ *   npm run eval -- judge    eval-results/smoke [--judge fake|openai:gpt-5|claude-cli:sonnet]
+ *   npm run eval -- report   eval-results/smoke
+ *   npm run eval -- all      experiments/smoke.json          # run + judge + report
+ *
+ * Cost controls: `estimate` prints the expected bill before anything runs; `maxUsd` in the config
+ * stops a run once billed cost passes the cap; `replayFrom` reuses recorded user turns; a judge
+ * spec of `claude-cli:<model>` grades through the Claude Code subscription instead of API credit.
+ */
+import "dotenv/config";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import { BudgetTracker, trackedProvider } from "./budget.js";
+import { estimateRun, estimateToMarkdown } from "./estimate.js";
+import { judgeConversation } from "./judge.js";
+import { fmtUsd } from "./pricing.js";
+import { resolveProvider } from "./providers.js";
+import { summarise, toMarkdown } from "./report.js";
+import { runMatrix } from "./runner.js";
+import type { ConversationRecord, RunConfig, ScoreRecord } from "./types.js";
+
+const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+
+function flag(name: string): string | undefined {
+  const i = process.argv.indexOf(`--${name}`);
+  return i !== -1 ? process.argv[i + 1] : undefined;
+}
+
+function loadConfig(path: string): RunConfig {
+  const cfg = JSON.parse(readFileSync(path, "utf8")) as RunConfig;
+  cfg.outDir = resolve(REPO_ROOT, cfg.outDir);
+  if (cfg.replayFrom) cfg.replayFrom = resolve(REPO_ROOT, cfg.replayFrom);
+  return cfg;
+}
+
+function readJsonDir<T>(dir: string): T[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as T);
+}
+
+function judgeSpec(cfg?: RunConfig): string {
+  return flag("judge") ?? cfg?.judgeModel ?? (process.env.JUDGE_MODEL ? `openai:${process.env.JUDGE_MODEL}` : "openai");
+}
+
+function printBudget(label: string, b: BudgetTracker) {
+  const unknown = b.unknownModels.size ? `  (no price for: ${[...b.unknownModels].join(", ")})` : "";
+  console.log(`${label}: ${b.calls} calls · list ${fmtUsd(b.listUsd)} · billed ${fmtUsd(b.spentUsd)}${unknown}`);
+}
+
+function cmdEstimate(cfgPath: string) {
+  const cfg = loadConfig(cfgPath);
+  const from = flag("from");
+  const measured = readJsonDir<ConversationRecord>(join(from ? resolve(REPO_ROOT, from) : cfg.outDir, "conversations"));
+  const md = estimateToMarkdown(estimateRun(cfg, judgeSpec(cfg), measured), cfg);
+  console.log(md);
+  if (measured.length) console.log(`\n(character/simulator/memory rows marked "measured" use ${measured.length} recorded conversations)`);
+}
+
+async function cmdRun(cfgPath: string) {
+  const cfg = loadConfig(cfgPath);
+  const total = cfg.scenarioIds.length * cfg.arms.length * cfg.repeats;
+  const budget = new BudgetTracker(cfg.maxUsd);
+  console.log(
+    `run: ${total} conversations × ${cfg.userTurns} user turns → ${cfg.outDir}` +
+      (cfg.replayFrom ? `  (replaying user turns from ${cfg.replayFrom})` : "") +
+      (cfg.maxUsd !== undefined ? `  (cap ${fmtUsd(cfg.maxUsd)})` : ""),
+  );
+  const t0 = Date.now();
+  await runMatrix(
+    cfg,
+    Number(flag("concurrency") ?? 4),
+    {
+      onTurn: ({ conversationId, userTurn, of }) => {
+        if (userTurn % 10 === 0 || userTurn === of) console.log(`  ${conversationId}: ${userTurn}/${of}  (billed so far ${fmtUsd(budget.spentUsd)})`);
+      },
+      onConversation: (rec) =>
+        console.log(
+          `${rec.truncated ? "✗ TRUNCATED" : "✓"} ${rec.id}  prompt ${rec.usage.promptTokens} (cached ${rec.usage.cachedPromptTokens}) / out ${rec.usage.completionTokens} tokens · ${fmtUsd(rec.costUsd ?? 0)}`,
+        ),
+    },
+    { budget },
+  );
+  console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  printBudget("run cost", budget);
+  if (budget.exceeded) console.log(`!! budget cap ${fmtUsd(cfg.maxUsd!)} hit — remaining conversations were skipped`);
+  return cfg;
+}
+
+async function cmdJudge(outDir: string, cfg?: RunConfig) {
+  const spec = judgeSpec(cfg);
+  const budget = new BudgetTracker(cfg?.maxUsd);
+  const { provider: raw, model } = resolveProvider(spec);
+  const provider = trackedProvider(raw, budget);
+  const convs = readJsonDir<ConversationRecord>(join(outDir, "conversations"));
+  const scoreDir = join(outDir, "scores");
+  mkdirSync(scoreDir, { recursive: true });
+  const concurrency = Number(flag("concurrency") ?? 4);
+  console.log(`judge: ${convs.length} conversations with ${raw.id}:${model ?? raw.defaultModel} (concurrency ${concurrency})`);
+
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, convs.length) }, async () => {
+    while (next < convs.length) {
+      const rec = convs[next++]!;
+      const score = await judgeConversation(rec, { provider, model });
+      writeFileSync(join(scoreDir, `${rec.id}.json`), JSON.stringify(score, null, 2));
+      const m = score.mean;
+      console.log(
+        `✓ ${rec.id}  cons ${m.consistency.toFixed(1)}  mem ${m.memory.toFixed(1)}  style ${m.style.toFixed(1)}  fmt ${m.format.toFixed(1)}  recall ${Math.round(score.probeRecall * 100)}%`,
+      );
+    }
+  });
+  await Promise.all(workers);
+  printBudget("judge cost", budget);
+}
+
+function cmdReport(outDir: string) {
+  const convs = readJsonDir<ConversationRecord>(join(outDir, "conversations"));
+  const scores = readJsonDir<ScoreRecord>(join(outDir, "scores"));
+  const md = toMarkdown(summarise(scores, convs), `Eval report · ${basename(outDir)}`);
+  writeFileSync(join(outDir, "report.md"), md);
+  console.log(md);
+}
+
+async function main() {
+  const [cmd, target] = process.argv.slice(2);
+  if (!cmd || !target) {
+    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | all <config.json>");
+    return;
+  }
+  switch (cmd) {
+    case "estimate":
+      cmdEstimate(resolve(target));
+      break;
+    case "run":
+      await cmdRun(resolve(target));
+      break;
+    case "judge":
+      await cmdJudge(resolve(target));
+      break;
+    case "report":
+      cmdReport(resolve(target));
+      break;
+    case "all": {
+      const cfg = await cmdRun(resolve(target));
+      await cmdJudge(cfg.outDir, cfg);
+      cmdReport(cfg.outDir);
+      break;
+    }
+    default:
+      throw new Error(`unknown command ${cmd}`);
+  }
+}
+
+main().catch((e) => {
+  console.error(e instanceof Error ? e.stack ?? e.message : e);
+  process.exit(1);
+});
