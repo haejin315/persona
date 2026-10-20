@@ -55,7 +55,11 @@ function defaultScript(messages: { role: string; content: string }[], call: numb
     });
   }
   // Simulated user.
-  if (/You are roleplaying as/i.test(sys)) return `*잠깐 생각한다.* "그러게요. (${call})"`;
+  if (/You are roleplaying as/i.test(sys)) {
+    // Say the persona's name once so the name probe is answerable.
+    const name = sys.match(/roleplaying as ([^,\n]+)/)?.[1]?.trim() ?? "";
+    return `*잠깐 생각한다.* "${call === 1 && name ? `저는 ${name}예요. ` : ""}그러게요. (${call})"`;
+  }
   // Character reply.
   return `*컵을 내려놓는다.* "...네. 그런가요. (${call})"`;
 }

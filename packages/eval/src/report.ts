@@ -14,6 +14,8 @@ export interface ArmSummary {
   n: number;
   metric: Record<Metric, { mean: number; sd: number }>;
   probeRecall: number;
+  /** Probes whose fact the simulated user never revealed (excluded from recall). */
+  unanswerableProbes: number;
   /** Mean per-metric score at each checkpoint turn, to see drift over the conversation. */
   drift: Array<{ turnIndex: number } & Record<Metric, number>>;
   tokensPerReply: { prompt: number; cached: number; completion: number };
@@ -46,6 +48,7 @@ export function summarise(scores: ScoreRecord[], convs: ConversationRecord[]): A
       n: ss.length,
       metric,
       probeRecall: mean(ss.map((s) => s.probeRecall).filter((x) => !Number.isNaN(x))),
+      unanswerableProbes: ss.reduce((a, s) => a + (s.unanswerableProbes ?? 0), 0),
       drift,
       tokensPerReply: {
         prompt: usages.reduce((a, u) => a + u.promptTokens, 0) / calls,
@@ -59,6 +62,7 @@ export function summarise(scores: ScoreRecord[], convs: ConversationRecord[]): A
 export function toMarkdown(summaries: ArmSummary[], title = "Eval report"): string {
   const out: string[] = [`## ${title}`, ""];
   out.push(`| arm | n | consistency | memory | style | format | probe recall | tokens/reply (prompt · cached · out) |`);
+  const unanswerable = summaries.reduce((a, s) => a + s.unanswerableProbes, 0);
   out.push(`|---|---:|---:|---:|---:|---:|---:|---|`);
   for (const s of summaries) {
     const cell = (m: Metric) => `${f1(s.metric[m].mean)} ± ${f1(s.metric[m].sd)}`;
@@ -67,6 +71,7 @@ export function toMarkdown(summaries: ArmSummary[], title = "Eval report"): stri
       `| ${s.armId} | ${s.n} | ${cell("consistency")} | ${cell("memory")} | ${cell("style")} | ${cell("format")} | ${pct(s.probeRecall)} | ${Math.round(t.prompt)} · ${Math.round(t.cached)} · ${Math.round(t.completion)} |`,
     );
   }
+  if (unanswerable) out.push("", `_${unanswerable} probe(s) excluded from recall: the simulated user never revealed the fact before asking._`);
   out.push("", "### Drift over the conversation (mean score at each checkpoint)", "");
   for (const s of summaries) {
     out.push(`**${s.armId}**`, "");

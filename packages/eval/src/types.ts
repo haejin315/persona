@@ -153,6 +153,12 @@ export interface ProbeResult {
   answer: string;
   /** Judge verdict. */
   recalled: boolean;
+  /**
+   * False when the simulated user never actually revealed the expected fact before asking
+   * (checked by keyword over the user's turns). Such probes are excluded from `probeRecall`
+   * and reported separately: they measure the simulator, not the character.
+   */
+  answerable: boolean;
 }
 
 export interface ScoreRecord {
@@ -164,7 +170,9 @@ export interface ScoreRecord {
   probes: ProbeResult[];
   /** Mean over checkpoints per metric, 1–5. */
   mean: Record<Metric, number>;
+  /** recalled / answerable probes. */
   probeRecall: number;
+  unanswerableProbes: number;
 }
 
 /** Why a user would press "regenerate" on a reply. Mined from eval conversations treated as logs. */

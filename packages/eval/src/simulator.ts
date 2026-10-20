@@ -57,7 +57,7 @@ Format: actions and narration between asterisks *...*, spoken words in double qu
 
 Current goal: ${beat.goal}
 ${beat.reveal.length ? `Work these facts about yourself into the conversation naturally if you haven't already (do not list them):\n${beat.reveal.map((r) => `- ${r}`).join("\n")}` : ""}
-${probe ? `\nIMPORTANT for this message: ${probe.ask} Ask it in character, casually, without hinting at the answer.` : ""}
+${probe ? `\nIMPORTANT for this message: ${probe.ask} Ask it in character, casually, without hinting at the answer. The question must be specific enough that the only correct answer is "${probe.expected}" (never say it yourself). You must have told ${characterName} this fact earlier; if you have not, state it plainly in this message instead of asking.` : ""}
 Do not break character. Do not summarise. Do not add meta commentary.`;
 
     const messages: ChatMessage[] = [

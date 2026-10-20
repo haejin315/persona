@@ -21,6 +21,32 @@ function revealedBy(scenario: Scenario, userTurn: number): string[] {
   return scenario.beats.filter((b) => b.fromUserTurn <= userTurn).flatMap((b) => b.reveal);
 }
 
+/**
+ * Did the simulated user actually reveal the expected fact before the probe? The expected answer's
+ * content words (particles stripped, parenthetical variants dropped) must appear in some earlier
+ * user turn. "어머니의 은반지" → "어머니", "은반지"; "디자인 회사 신입(디자이너)" → "디자인", "회사", "신입".
+ */
+export function probeAnswerable(turns: Turn[], atUserTurn: number, expected: string): boolean {
+  const userText = (() => {
+    let seen = 0;
+    const parts: string[] = [];
+    for (const t of turns) {
+      if (t.role !== "user") continue;
+      seen++;
+      if (seen >= atUserTurn) break;
+      parts.push(t.content);
+    }
+    return parts.join("\n");
+  })();
+  const words = expected
+    .replace(/\([^)]*\)/g, " ")
+    .split(/[\s,·/]+/)
+    .map((w) => w.replace(/(의|을|를|은|는|이|가|에서|으로|로|과|와)$/u, ""))
+    .filter((w) => w.length >= 2);
+  // Every content word must have been said (so "mother's ring" needs both "mother" and "ring").
+  return words.length === 0 || words.every((w) => userText.includes(w));
+}
+
 /** Map a character turn index to the number of user turns that preceded it. */
 function userTurnsBefore(turns: Turn[], turnIndex: number): number {
   return turns.slice(0, turnIndex + 1).filter((t) => t.role === "user").length;
@@ -136,8 +162,18 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
       `You check whether a roleplay character's reply correctly recalls a fact. Respond with JSON only: {"recalled":true|false,"note":"≤15 words"}. "recalled" is true only if the reply conveys the expected information (paraphrase is fine; wrong or missing is false).`,
       `Expected information: ${p.expected}\nThe user asked: ${p.ask}\n\nCharacter's reply:\n${answer}`,
     );
-    probes.push({ atUserTurn: p.atUserTurn, ask: p.ask, expected: p.expected, answer, recalled: parsed?.recalled === true });
+    probes.push({
+      atUserTurn: p.atUserTurn,
+      ask: p.ask,
+      expected: p.expected,
+      answer,
+      recalled: parsed?.recalled === true,
+      answerable: probeAnswerable(rec.turns, p.atUserTurn, p.expected),
+    });
   }
+  // Reused probe verdicts get the (rule-based) answerable flag recomputed.
+  for (const p of probes) p.answerable = probeAnswerable(rec.turns, p.atUserTurn, p.expected);
+  const answerable = probes.filter((p) => p.answerable);
 
   const mean = Object.fromEntries(
     METRICS.map((m) => [m, checkpoints.length ? checkpoints.reduce((a, c) => a + c[m], 0) / checkpoints.length : NaN]),
@@ -151,6 +187,7 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
     checkpoints,
     probes,
     mean,
-    probeRecall: probes.length ? probes.filter((p) => p.recalled).length / probes.length : NaN,
+    probeRecall: answerable.length ? answerable.filter((p) => p.recalled).length / answerable.length : NaN,
+    unanswerableProbes: probes.length - answerable.length,
   };
 }
