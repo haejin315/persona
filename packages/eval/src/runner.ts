@@ -11,11 +11,14 @@ import type { Arm, ConversationRecord, RunConfig, Scenario, UsageTotals } from "
 export interface RunHooks {
   onTurn?: (c: { conversationId: string; userTurn: number; of: number }) => void;
   onConversation?: (rec: ConversationRecord) => void;
+  onSkip?: (ids: string[]) => void;
 }
 
 export interface RunContext {
   budget?: BudgetTracker;
   replay?: ReplayIndex;
+  /** Reuse finished recordings already in outDir (default true). */
+  resume?: boolean;
 }
 
 /** Recorded conversations to replay the user side from. */
@@ -42,6 +45,9 @@ export class ReplayIndex {
   }
 }
 
+/** Conversation id → file name (arm ids like "v2-structured/sonnet" contain path separators). */
+export const recordFileName = (id: string) => `${id.replace(/[\/:*?"<>|]/g, "-")}.json`;
+
 const emptyTotals = (): UsageTotals => ({ promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0, calls: 0 });
 function addUsage(t: UsageTotals, u?: TokenUsage, model?: string) {
   if (!u) return;
@@ -67,7 +73,9 @@ export async function runConversation(
 
   const chat = resolveProvider(arm.model);
   const chatProvider = track(chat.provider);
-  const memoryProvider = chat.provider.id === "fake" ? chatProvider : track(resolveProvider("openai").provider);
+  // Memory consolidation: its own spec (e.g. "claude-cli:haiku"), else the character's provider.
+  const mem = chat.provider.id === "fake" || !cfg.memoryModel ? { provider: chatProvider, model: undefined } : resolveProvider(cfg.memoryModel);
+  const memoryProvider = mem.provider === chatProvider ? chatProvider : track(mem.provider);
 
   const session = new ChatSession({
     card,
@@ -78,7 +86,7 @@ export async function runConversation(
     model: chat.model,
     temperature: arm.temperature,
     persona: scenario.persona,
-    memory: { model: cfg.memoryModel },
+    memory: { model: mem.model },
   });
 
   let user: UserSource;
@@ -156,6 +164,7 @@ export async function runConversation(
 export async function runMatrix(cfg: RunConfig, concurrency = 4, hooks: RunHooks = {}, ctx: RunContext = {}): Promise<ConversationRecord[]> {
   const dir = join(cfg.outDir, "conversations");
   mkdirSync(dir, { recursive: true });
+  const skipped: ConversationRecord[] = [];
   const budget = ctx.budget ?? new BudgetTracker(cfg.maxUsd);
   const replay = ctx.replay ?? (cfg.replayFrom ? ReplayIndex.load(cfg.replayFrom, cfg.replayArmId) : undefined);
 
@@ -164,16 +173,27 @@ export async function runMatrix(cfg: RunConfig, concurrency = 4, hooks: RunHooks
     const scenario = findScenario(sid);
     for (const arm of cfg.arms) {
       for (let r = 0; r < cfg.repeats; r++) {
+        // Resume: a finished recording already on disk is reused (lets a run continue after a
+        // subscription usage-window limit without redoing paid work).
+        const existing = join(dir, recordFileName(`${scenario.id}__${arm.id}__r${r}`));
+        if (ctx.resume !== false && existsSync(existing)) {
+          const rec = JSON.parse(readFileSync(existing, "utf8")) as ConversationRecord;
+          if (!rec.truncated) {
+            skipped.push(rec);
+            continue;
+          }
+        }
         jobs.push(async () => {
           const rec = await runConversation(scenario, arm, cfg, r, hooks, { budget, replay });
-          writeFileSync(join(dir, `${rec.id}.json`), JSON.stringify(rec, null, 2));
+          writeFileSync(join(dir, recordFileName(rec.id)), JSON.stringify(rec, null, 2));
           return rec;
         });
       }
     }
   }
 
-  const results: ConversationRecord[] = [];
+  if (skipped.length) hooks.onSkip?.(skipped.map((r) => r.id));
+  const results: ConversationRecord[] = [...skipped];
   let next = 0;
   const workers = Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
     while (next < jobs.length && !budget.exceeded) {

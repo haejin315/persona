@@ -1,6 +1,6 @@
 /**
  *   npm run eval -- estimate experiments/prompt-version.json [--judge spec] [--from <outDir>]
- *   npm run eval -- run      experiments/smoke.json          # generate conversations
+ *   npm run eval -- run      experiments/smoke.json          # generate conversations (resumes; --fresh redoes)
  *   npm run eval -- judge    eval-results/smoke [--judge fake|openai:gpt-5|claude-cli:sonnet]
  *   npm run eval -- report   eval-results/smoke
  *   npm run eval -- all      experiments/smoke.json          # run + judge + report
@@ -18,7 +18,7 @@ import { judgeConversation } from "./judge.js";
 import { fmtUsd } from "./pricing.js";
 import { resolveProvider } from "./providers.js";
 import { summarise, toMarkdown } from "./report.js";
-import { runMatrix } from "./runner.js";
+import { recordFileName, runMatrix } from "./runner.js";
 import type { ConversationRecord, RunConfig, ScoreRecord } from "./types.js";
 
 const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
@@ -43,7 +43,7 @@ function readJsonDir<T>(dir: string): T[] {
 }
 
 function judgeSpec(cfg?: RunConfig): string {
-  return flag("judge") ?? cfg?.judgeModel ?? (process.env.JUDGE_MODEL ? `openai:${process.env.JUDGE_MODEL}` : "openai");
+  return flag("judge") ?? cfg?.judgeModel ?? process.env.JUDGE_MODEL ?? "claude-cli:opus";
 }
 
 function printBudget(label: string, b: BudgetTracker) {
@@ -81,8 +81,9 @@ async function cmdRun(cfgPath: string) {
         console.log(
           `${rec.truncated ? "✗ TRUNCATED" : "✓"} ${rec.id}  prompt ${rec.usage.promptTokens} (cached ${rec.usage.cachedPromptTokens}) / out ${rec.usage.completionTokens} tokens · ${fmtUsd(rec.costUsd ?? 0)}`,
         ),
+      onSkip: (ids) => console.log(`  resuming: ${ids.length} finished conversation(s) already on disk (use --fresh to redo)`),
     },
-    { budget },
+    { budget, resume: !process.argv.includes("--fresh") },
   );
   console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   printBudget("run cost", budget);
@@ -106,7 +107,7 @@ async function cmdJudge(outDir: string, cfg?: RunConfig) {
     while (next < convs.length) {
       const rec = convs[next++]!;
       const score = await judgeConversation(rec, { provider, model });
-      writeFileSync(join(scoreDir, `${rec.id}.json`), JSON.stringify(score, null, 2));
+      writeFileSync(join(scoreDir, recordFileName(rec.id)), JSON.stringify(score, null, 2));
       const m = score.mean;
       console.log(
         `✓ ${rec.id}  cons ${m.consistency.toFixed(1)}  mem ${m.memory.toFixed(1)}  style ${m.style.toFixed(1)}  fmt ${m.format.toFixed(1)}  recall ${Math.round(score.probeRecall * 100)}%`,

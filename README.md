@@ -19,7 +19,7 @@ scripts/           재현 가능한 계산 스크립트 (`npm run econ`)
 - **정체성과 상태의 분리.** 카드의 `identity`/`world`/`hardConstraints`는 절대 바뀌지 않는 블록, `memory`는 매 턴 갱신되는 블록. 둘을 섞어 두면 긴 대화에서 설정이 흐려진다는 가설을 검증한다.
 - **말투는 언어별 모듈.** `style.ko`, `style.ja`에 존댓말/경어 수준, 호칭, 1인칭, 말버릇, 금지 표현, 예시 대사를 따로 둔다. 언어가 늘 때 정체성은 건드리지 않는다.
 - **프롬프트는 버전이다.** `v1-flat`(평면 베이스라인), `v2-structured`(섹션 + 메모리 + few-shot). 평가 하네스가 버전 간 차이를 측정한다.
-- **프로바이더 중립.** OpenAI, Ollama(로컬 오픈소스), 추후 Anthropic이 같은 인터페이스 뒤에 있다. 엔진, 서버, 평가가 모두 같은 `ChatSession`을 쓰므로 평가가 측정하는 것이 곧 유저가 받는 것이다.
+- **프로바이더 중립.** Claude(Claude Code CLI 경유), OpenAI, Ollama(로컬 오픈소스)가 같은 인터페이스 뒤에 있다. 모델은 `provider:model` 스펙 문자열 하나로 바꾼다. 엔진, 서버, 평가가 모두 같은 `ChatSession`을 쓰므로 평가가 측정하는 것이 곧 유저가 받는 것이다.
 - **장기 기억.** 최근 N턴은 그대로, 그 밖은 요약 + 사실 목록 + 관계 단계로 접어서 프롬프트에 넣는다.
 
 ## 캐릭터
@@ -33,24 +33,28 @@ scripts/           재현 가능한 계산 스크립트 (`npm run econ`)
 
 ```bash
 npm install
-cp .env.example .env     # OPENAI_API_KEY 입력
+cp .env.example .env     # 기본값은 Claude Code CLI(구독) 경로. `claude`가 PATH에 있고 로그인돼 있으면 키 없이 동작
 npm test
 
 # 터미널 채팅
-npm run chat -- --character haru --lang ko
-npm run chat -- --character kael --lang ja --prompt v1-flat
-npm run chat -- --character haru --lang ko --model ollama:qwen2.5:7b   # Ollama 설치 시
+npm run chat -- --character haru --lang ko                              # claude-cli:sonnet
+npm run chat -- --character kael --lang ja --model claude-cli:haiku --prompt v1-flat
+npm run chat -- --character haru --lang ko --model openai:gpt-5-mini    # OPENAI_API_KEY 설정 시
+npm run chat -- --character haru --lang ko --model ollama:qwen2.5:7b    # Ollama 설치 시
 ```
+
+기본 LLM 경로는 Claude Code CLI(`claude -p`)다. API 키 대신 Claude 구독으로 돌리기 위한 선택이며, 프로세스 1개/호출(약 1초), 온도 조절 불가, 구독 사용량 윈도우 적용이라는 제약이 있다. 그래서 프로바이더 추상화가 있고, 스펙 문자열만 바꾸면 OpenAI나 로컬 모델로 같은 실험을 다시 돌릴 수 있다.
 
 입력은 앱들과 같은 형식으로: `*행동과 지문*` `"대사"`. 채팅 중 명령: `/more` (캐릭터가 이어서), `/regen` (재생성), `/prompt`, `/memory`, `/quit`
 
 ## 평가
 
 ```bash
-npm run eval -- all packages/eval/experiments/smoke.json --judge fake      # 키 없이 파이프라인 점검
-npm run eval -- estimate packages/eval/experiments/prompt-version.json     # 실행 전 예상 비용
-npm run eval -- all packages/eval/experiments/prompt-version.json          # v1-flat vs v2-structured (gpt-5-mini)
-npm run eval -- all packages/eval/experiments/model.json                   # gpt-5-mini vs gpt-5-nano (v2, 유저 턴 리플레이)
+npm run eval -- all packages/eval/experiments/smoke.json --judge fake      # 오프라인 파이프라인 점검 (가짜 프로바이더)
+npm run eval -- all packages/eval/experiments/smoke-claude.json            # 실제 모델로 10턴 1개 (구독, 약 1분)
+npm run eval -- estimate packages/eval/experiments/prompt-version.json     # 실행 전 호출 수·토큰·비용
+npm run eval -- all packages/eval/experiments/prompt-version.json          # v1-flat vs v2-structured (sonnet)
+npm run eval -- all packages/eval/experiments/model.json                   # sonnet vs haiku (v2, 유저 턴 리플레이)
 ```
 
 - **시나리오** (`packages/eval/scenarios/*.yaml`): 유저 페르소나, 비트별 목표, 비트마다 자연스럽게 흘릴 사실(정답지), 특정 턴에 던지는 회상 질문(프로브).
@@ -60,14 +64,15 @@ npm run eval -- all packages/eval/experiments/model.json                   # gpt
 
 ### 비용 통제
 
-실험은 전부 유료 API 위에서 돌기 때문에, 돈을 쓰기 전에 숫자를 보고 상한을 거는 장치를 넣었다.
+실험은 유료 API나 구독 사용량 위에서 돌기 때문에, 쓰기 전에 숫자를 보고 상한을 거는 장치를 넣었다.
 
 | 장치 | 무엇 | 어디 |
 |---|---|---|
 | `estimate` | 역할별(캐릭터·시뮬레이터·기억·채점) 호출 수와 토큰, 정가 비용과 실제 청구 비용을 실행 전에 표로 출력. 이전 실행 기록이 있으면 실측 평균으로 대체 | `eval estimate <config>` |
 | `maxUsd` | 실행 중 청구 비용 누적이 상한을 넘으면 새 호출을 거부하고 진행 중 대화는 `truncated`로 저장, 남은 대화는 건너뜀 | 실험 설정 |
 | `replayFrom` | 이전 실행의 유저 발화를 그대로 재사용. 시뮬레이터 비용 0, 모든 arm이 같은 입력을 받아 분산 감소 | 실험 설정 |
-| `claude-cli:<model>` | 채점을 Claude Code CLI(`claude -p`)로 돌려 구독 한도에서 차감. 다른 벤더 모델이 채점하므로 자기 선호 편향도 줄어든다. 고정 오버헤드 830토큰(캐시됨), 호출당 약 1초 | `judgeModel` 또는 `--judge` |
+| `claude-cli:<model>` | Claude Code CLI(`claude -p`)로 호출해 구독 한도에서 차감(청구 $0). 고정 오버헤드 830토큰(캐시됨), 호출당 약 1초. 채점은 생성 모델보다 상위(opus)로 두어 자기 채점을 피한다 | 모든 모델 스펙 |
+| 재시작 | `run`은 outDir에 이미 끝난 대화가 있으면 건너뛴다. 구독 사용량 윈도우에 걸려 멈춰도 다음 윈도우에 같은 명령으로 이어간다 (`--fresh`로 처음부터) | `eval run` |
 
 가격표는 `packages/eval/src/pricing.ts` 한 곳에 있고, 구독·로컬 경로는 정가를 계산하되 청구액은 0으로 잡는다.
 

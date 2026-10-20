@@ -2,7 +2,7 @@
  * Interactive terminal chat for quick manual testing.
  *
  *   npm run chat -- --character haru --lang ko --persona "민수: 28살 회사원, 매일 아침 출근길에 카페에 들른다"
- *   npm run chat -- --character kael --lang ja --model openai:gpt-5-nano --prompt v1-flat
+ *   npm run chat -- --character kael --lang ja --model claude-cli:haiku --prompt v1-flat
  *
  * Write like the apps do:  *행동이나 지문*  "대사"
  * Commands:  /more (character continues)  /regen  /memory  /prompt  /quit
@@ -11,7 +11,7 @@ import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { findCharacter, loadAllCharacters } from "./characters.js";
-import { parseModelSpec, providerFromEnv } from "./providers/index.js";
+import { DEFAULT_MODEL_SPEC, providerFromSpec } from "./providers/index.js";
 import { ChatSession } from "./session.js";
 import type { Lang, Turn, UserPersona } from "./types.js";
 
@@ -31,7 +31,7 @@ function parsePersona(spec: string | undefined): UserPersona | undefined {
 async function main() {
   const characterId = arg("character");
   const lang = (arg("lang", "ko") as Lang) ?? "ko";
-  const spec = parseModelSpec(arg("model", "openai")!);
+  const modelSpec = arg("model", process.env.CHAT_MODEL ?? DEFAULT_MODEL_SPEC)!;
   const promptVersion = arg("prompt");
   const persona = parsePersona(arg("persona"));
 
@@ -39,25 +39,27 @@ async function main() {
     console.log("Available characters:");
     for (const c of loadAllCharacters()) console.log(`  ${c.id}  (${c.genre})  ${c.name.ko}`);
     console.log(
-      '\nUsage: npm run chat -- --character <id> [--lang ko|ja] [--model openai[:model]|ollama[:model]] [--prompt v1-flat|v2-structured] [--persona "이름: 설명"]',
+      '\nUsage: npm run chat -- --character <id> [--lang ko|ja] [--model claude-cli[:sonnet|haiku|opus]|openai[:model]|ollama[:model]] [--prompt v1-flat|v2-structured] [--persona "이름: 설명"]',
     );
     return;
   }
 
   const card = findCharacter(characterId);
-  const provider = providerFromEnv(spec.provider);
+  const { provider, model } = providerFromSpec(modelSpec);
+  const mem = process.env.MEMORY_MODEL ? providerFromSpec(process.env.MEMORY_MODEL) : { provider, model };
   const session = new ChatSession({
     card,
     lang,
     provider,
+    memoryProvider: mem.provider,
     promptVersion,
-    model: spec.model,
+    model,
     persona,
-    memory: { model: process.env.MEMORY_MODEL },
+    memory: { model: mem.model },
   });
 
   const name = card.name[lang] ?? card.id;
-  console.log(`\n[${provider.id}:${spec.model ?? provider.defaultModel}] [${session.promptVersion.id}] ${name} ↔ ${session.persona.name}\n`);
+  console.log(`\n[${provider.id}:${model ?? provider.defaultModel}] [${session.promptVersion.id}] ${name} ↔ ${session.persona.name}\n`);
   console.log(`${name}: ${session.open().content}\n`);
 
   const printTurn = (t: Turn) => {

@@ -1,0 +1,12 @@
+{
+  "scenarioIds": ["haru-ko"],
+  "arms": [
+    { "id": "v2-structured/haiku", "promptVersion": "v2-structured", "model": "claude-cli:haiku" }
+  ],
+  "userTurns": 10,
+  "simulatorModel": "claude-cli:haiku",
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "judgeModel": "claude-cli:haiku",
+  "outDir": "eval-results/smoke-claude"
+}

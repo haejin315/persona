@@ -1,14 +1,13 @@
 {
   "scenarioIds": ["haru-ko", "kael-ko"],
   "arms": [
-    { "id": "v1-flat/gpt-5-mini", "promptVersion": "v1-flat", "model": "openai:gpt-5-mini" },
-    { "id": "v2-structured/gpt-5-mini", "promptVersion": "v2-structured", "model": "openai:gpt-5-mini" }
+    { "id": "v1-flat/sonnet", "promptVersion": "v1-flat", "model": "claude-cli:sonnet" },
+    { "id": "v2-structured/sonnet", "promptVersion": "v2-structured", "model": "claude-cli:sonnet" }
   ],
   "userTurns": 50,
-  "simulatorModel": "openai:gpt-5-mini",
-  "memoryModel": "gpt-5-nano",
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
   "repeats": 2,
-  "judgeModel": "claude-cli:sonnet",
-  "maxUsd": 3,
+  "judgeModel": "claude-cli:opus",
   "outDir": "eval-results/prompt-version"
 }

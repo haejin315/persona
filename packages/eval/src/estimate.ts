@@ -36,6 +36,7 @@ interface Profile {
 /** Per-call defaults. Character prompt grows with the window; these are 50-turn averages. */
 const DEFAULTS = {
   character: { "v1-flat": { prompt: 4_500, cachedShare: 0.8, out: 350 }, "v2-structured": { prompt: 6_900, cachedShare: 0.85, out: 350 } } as Record<string, Profile>,
+  // Token totals matter even when billed $0: they are what the subscription's usage window counts.
   simulator: { prompt: 1_800, cachedShare: 0.4, out: 120 } as Profile,
   memory: { prompt: 1_500, cachedShare: 0, out: 250 } as Profile,
   judge: { prompt: 3_500, cachedShare: 0.3, out: 150 } as Profile,
@@ -92,7 +93,7 @@ export function estimateRun(cfg: RunConfig, judgeSpec: string, measured: Convers
   }
 
   // Memory consolidation (always the OpenAI memory model unless the arm is fake).
-  const memModel = cfg.arms.every((a) => a.model.startsWith("fake")) ? "fake" : `openai:${cfg.memoryModel ?? process.env.MEMORY_MODEL ?? "gpt-5-nano"}`;
+  const memModel = cfg.arms.every((a) => a.model.startsWith("fake")) ? "fake" : cfg.memoryModel ?? cfg.arms[0]!.model;
   const mm = measuredProfile(measured.filter((r) => r.memoryUsage?.model), (r) => r.memoryUsage);
   rows.push(row("memory", memModel, conversations * consolidations, mm ?? DEFAULTS.memory, Boolean(mm)));
 
