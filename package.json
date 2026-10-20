@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p packages/engine && tsc --noEmit -p packages/eval",
     "test": "vitest run",
     "econ": "tsx scripts/unit-economics.ts",
-    "eval": "tsx packages/eval/src/cli.ts"
+    "eval": "tsx packages/eval/src/cli.ts",
+    "render": "tsx scripts/render-prompt.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

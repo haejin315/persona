@@ -1,0 +1,14 @@
+{
+  "scenarioIds": ["haru-ko", "kael-ko"],
+  "arms": [
+    { "id": "v3-structured/sonnet", "promptVersion": "v3-structured", "model": "claude-cli:sonnet" },
+    { "id": "v3-recent/sonnet", "promptVersion": "v3-recent", "model": "claude-cli:sonnet" }
+  ],
+  "userTurns": 50,
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "replayFrom": "eval-results/regen-fix",
+  "replayArmId": "v2-structured/sonnet",
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/regen-fix-v5"
+}

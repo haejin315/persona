@@ -109,10 +109,31 @@ const VARIETY_BLOCK = (name: string, user: string, v4: boolean) => `# VARIETY (w
 - The examples above show the voice, not a template: do not copy their gestures or sentence shapes.`;
 
 /** 0 = v2, 1 = v3 (VARIETY block), 2 = v4 (+ no echo openers, varied sign-offs, answer everything first). */
+/**
+ * Engine-side anti-repetition: the speech lines of the character's last few replies, so the model
+ * is told explicitly what it has just said instead of being asked to notice it in the transcript.
+ * The v4 regenerate-mining round showed the remaining repetition was *content* restated across
+ * turns (the same offer or promise three replies running), which prompt rules alone did not fix.
+ */
+function recentlySaid(recent: Turn[], name: string, replies = 3): string {
+  const lines = recent
+    .filter((t) => t.role === "character")
+    .slice(-replies)
+    .map((t) => {
+      const speech = [...t.content.matchAll(/"([^"]{4,})"|「([^」]{4,})」/g)].map((m) => (m[1] ?? m[2])!.trim());
+      const gestures = [...t.content.matchAll(/\*([^*]{4,})\*/g)].map((m) => m[1]!.trim());
+      const said = speech.join(" / ");
+      const did = gestures.slice(0, 2).join(" / ");
+      return `- ${name} said: ${said.length > 160 ? said.slice(0, 160) + "…" : said || "(no speech)"}${did ? `  | did: ${did.length > 80 ? did.slice(0, 80) + "…" : did}` : ""}`;
+    });
+  return lines.length ? lines.join("\n") : "- (nothing yet)";
+}
+
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 = 0,
+  recentBlock = false,
 ): ChatMessage[] {
   {
     const st = card.style[lang]!;
@@ -177,7 +198,14 @@ ${bullet(memory.facts)}
 
 ${variety ? `${VARIETY_BLOCK(name, persona.name, variety === 2)}
 
-` : ""}# HARD CONSTRAINTS
+` : ""}${
+  recentBlock
+    ? `# RECENTLY SAID (your last replies, condensed - do NOT restate these points, offers, promises or gestures; move the scene forward instead)
+${recentlySaid(recent, name)}
+
+`
+    : ""
+}# HARD CONSTRAINTS
 ${bullet(card.hardConstraints.map(f))}
 ${
   boundaries === "card"
@@ -234,11 +262,19 @@ export const v4Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 2),
 };
 
+/** v3 + an engine-built RECENTLY SAID block (last 3 replies condensed). */
+export const v3Recent: PromptVersion = {
+  id: "v3-recent",
+  description: "v3-structured + RECENTLY SAID block: the engine lists what the character just said so content is not restated.",
+  build: (ctx) => buildV2(ctx, "card", 1, true),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
   [v3Structured.id]: v3Structured,
   [v4Structured.id]: v4Structured,
+  [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
   [v2StrictSafety.id]: v2StrictSafety,
 };
