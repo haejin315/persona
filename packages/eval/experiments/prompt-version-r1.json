@@ -1,0 +1,13 @@
+{
+  "scenarioIds": ["haru-ko", "kael-ko"],
+  "arms": [
+    { "id": "v1-flat/sonnet", "promptVersion": "v1-flat", "model": "claude-cli:sonnet" },
+    { "id": "v2-structured/sonnet", "promptVersion": "v2-structured", "model": "claude-cli:sonnet" }
+  ],
+  "userTurns": 50,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/prompt-version"
+}

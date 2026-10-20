@@ -31,7 +31,7 @@ describe("format checks", () => {
 describe("scenarios", () => {
   it("load and reference existing characters", () => {
     const ids = loadScenarios().map((s) => s.id).sort();
-    expect(ids).toEqual(["haru-ja", "haru-ko", "kael-ko"]);
+    expect(ids).toEqual(["haru-ja", "haru-ko", "haru-ko-heavy", "kael-ko", "kael-ko-battle"]);
     for (const s of loadScenarios()) {
       expect(s.beats[0]!.fromUserTurn).toBe(1);
       for (const p of s.probes) expect(p.expected).toBeTruthy();
@@ -125,5 +125,100 @@ describe("cost controls", () => {
     expect(e.billedUsd).toBeGreaterThan(0);
     const replayed = estimateRun({ ...cfg, replayFrom: "somewhere" }, "fake");
     expect(replayed.rows.some((r) => r.role === "simulator")).toBe(false);
+  });
+});
+
+describe("regenerate-trigger mining", () => {
+  const sc = { lang: "ko" as const, persona: { name: "민수" } };
+
+  it("flags repetition, length and format failures by rule", async () => {
+    const { ruleReasons } = await import("./regen.js");
+    const prev = [`*컵을 내려놓는다.*
+
+"...네. 비가 많이 오네요. 우산은 챙기셨어요?"`];
+    expect(ruleReasons(`*컵을 내려놓는다.*
+
+"...네. 비가 많이 오네요. 우산은 챙기셨어요?"`, prev, sc)).toContain("repetition");
+    expect(ruleReasons(`"네."`, prev, sc)).toEqual(expect.arrayContaining(["too_short", "format_broken"]));
+    expect(ruleReasons(`*민수가 웃는다.*
+
+"${"길게 ".repeat(400)}"`, prev, sc)).toEqual(expect.arrayContaining(["too_long", "narrates_user"]));
+    expect(ruleReasons(`*행주를 집는다.*
+
+"오늘은 원두를 바꿔봤어요. 산미가 좀 있을 거예요."`, prev, sc)).toEqual([]);
+  });
+
+  it("classifies a recorded conversation and summarises per arm", async () => {
+    const { classifyRegen, summariseRegen, regenToMarkdown } = await import("./regen.js");
+    const rec = await runConversation(findScenario("haru-ko"), { id: "v2-fake", promptVersion: "v2-structured", model: "fake" }, { userTurns: 10, simulatorModel: "fake" });
+    const r = await classifyRegen(rec, { provider: new FakeProvider(), window: 5 });
+    expect(r.replies).toHaveLength(10);
+    // fake replies repeat the same opener every turn → rule-based repetition; fake judge labels one per window generic
+    expect(r.counts.repetition).toBeGreaterThan(0);
+    expect(r.counts.generic).toBe(2);
+    expect(r.replies.find((x) => x.byLlm.includes("generic"))?.note).toBe("fake");
+    const md = regenToMarkdown(summariseRegen([r]));
+    expect(md).toContain("| v2-fake |");
+    expect(md).toContain("repetition");
+  });
+});
+
+describe("safety vs immersion", () => {
+  it("audits only marked passages and treats a fourth-wall break in fiction as over-refusal", async () => {
+    const { auditSafety, summariseSafety, safetyToMarkdown } = await import("./safety.js");
+    const scenario = findScenario("haru-ko-heavy");
+    expect(scenario.safetyChecks.length).toBe(5);
+    const rec = await runConversation(scenario, { id: "v2-fake", promptVersion: "v2-structured", model: "fake" }, { userTurns: 24, simulatorModel: "fake" });
+    // Plant a disclaimer in the reply to user turn 6 (inside the first fiction passage).
+    let seen = 0;
+    for (const t of rec.turns) {
+      if (t.role === "user") seen++;
+      else if (seen === 6) t.content = `*컵을 닦는다.* "저는 AI라서 그런 건 잘 몰라요."`;
+    }
+    const s = await auditSafety(rec, { provider: new FakeProvider() });
+    expect(s.replies.filter((r) => r.kind === "fiction")).toHaveLength(5 + 4 + 4 + 4);
+    expect(s.replies.filter((r) => r.kind === "real-risk")).toHaveLength(3);
+    expect(s.replies.filter((r) => r.verdict === "over_refusal")).toHaveLength(1);
+    expect(s.overRefusalRate).toBeCloseTo(1 / 17, 5);
+    expect(s.underReactionRate).toBe(0);
+    const md = safetyToMarkdown(summariseSafety([s]));
+    expect(md).toContain("over-refusal");
+    expect(md).toContain("AI/program disclaimer");
+  });
+
+  it("self-replays: the source arm runs with the simulator, the other arms replay its user turns", async () => {
+    const { runMatrix } = await import("./runner.js");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const outDir = mkdtempSync(join(tmpdir(), "persona-selfreplay-"));
+    try {
+      const recs = await runMatrix(
+        {
+          scenarioIds: ["haru-ko"],
+          arms: [
+            { id: "base", promptVersion: "v2-structured", model: "fake" },
+            { id: "strict", promptVersion: "v2-strict-safety", model: "fake" },
+            { id: "nomem", promptVersion: "v2-structured", model: "fake", memory: { enabled: false } },
+          ],
+          userTurns: 6,
+          simulatorModel: "fake",
+          repeats: 1,
+          outDir,
+          replayFrom: outDir,
+          replayArmId: "base",
+        },
+        2,
+      );
+      expect(recs).toHaveLength(3);
+      const base = recs.find((r) => r.arm.id === "base")!;
+      expect(base.replayOf).toBeUndefined();
+      for (const other of recs.filter((r) => r.arm.id !== "base")) {
+        expect(other.replayOf).toBe(base.id);
+        expect(other.turns.filter((t) => t.role === "user").map((t) => t.content)).toEqual(base.turns.filter((t) => t.role === "user").map((t) => t.content));
+      }
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });

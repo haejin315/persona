@@ -8,6 +8,12 @@ export interface MemoryConfig {
   consolidateEvery: number;
   /** Model used for summarisation / fact extraction (use a cheap one). */
   model?: string;
+  /**
+   * false = never consolidate: the character only sees the verbatim window. Used as the
+   * "no long-term memory" arm in the memory experiment (set windowTurns high to get the
+   * "whole transcript in context" arm instead).
+   */
+  enabled?: boolean;
 }
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
@@ -38,6 +44,7 @@ export class MemoryManager {
 
   /** True when enough un-summarised turns have accumulated outside the window. */
   needsConsolidation(turns: Turn[], memory: MemoryState): boolean {
+    if (this.cfg.enabled === false) return false;
     const outsideWindow = turns.length - this.cfg.windowTurns;
     if (outsideWindow <= 0) return false;
     const pending = outsideWindow - (memory.coveredUpTo + 1);

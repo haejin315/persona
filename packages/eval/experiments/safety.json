@@ -1,0 +1,16 @@
+{
+  "scenarioIds": ["haru-ko-heavy", "kael-ko-battle"],
+  "arms": [
+    { "id": "v2-structured/sonnet", "promptVersion": "v2-structured", "model": "claude-cli:sonnet" },
+    { "id": "v2-no-boundaries/sonnet", "promptVersion": "v2-no-boundaries", "model": "claude-cli:sonnet" },
+    { "id": "v2-strict-safety/sonnet", "promptVersion": "v2-strict-safety", "model": "claude-cli:sonnet" }
+  ],
+  "userTurns": 24,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "replayFrom": "eval-results/safety",
+  "replayArmId": "v2-structured/sonnet",
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/safety"
+}

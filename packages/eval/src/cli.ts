@@ -3,7 +3,9 @@
  *   npm run eval -- run      experiments/smoke.json          # generate conversations (resumes; --fresh redoes)
  *   npm run eval -- judge    eval-results/smoke [--judge fake|openai:gpt-5|claude-cli:sonnet]
  *   npm run eval -- report   eval-results/smoke
- *   npm run eval -- all      experiments/smoke.json          # run + judge + report
+ *   npm run eval -- regen    eval-results/smoke [--judge spec] [--rules-only]   # regenerate-trigger mining
+ *   npm run eval -- safety   eval-results/safety [--judge spec]                 # safety-vs-immersion audit
+ *   npm run eval -- all      experiments/smoke.json          # run + judge + report + regen (+ safety if scenarios have checks)
  *
  * Cost controls: `estimate` prints the expected bill before anything runs; `maxUsd` in the config
  * stops a run once billed cost passes the cap; `replayFrom` reuses recorded user turns; a judge
@@ -17,9 +19,12 @@ import { estimateRun, estimateToMarkdown } from "./estimate.js";
 import { judgeConversation } from "./judge.js";
 import { fmtUsd } from "./pricing.js";
 import { resolveProvider } from "./providers.js";
+import { classifyRegen, regenToMarkdown, summariseRegen } from "./regen.js";
 import { summarise, toMarkdown } from "./report.js";
 import { recordFileName, runMatrix } from "./runner.js";
-import type { ConversationRecord, RunConfig, ScoreRecord } from "./types.js";
+import { auditSafety, safetyToMarkdown, summariseSafety } from "./safety.js";
+import { findScenario } from "./scenarios.js";
+import type { ConversationRecord, RegenRecord, RunConfig, SafetyRecord, ScoreRecord } from "./types.js";
 
 const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
 
@@ -118,6 +123,82 @@ async function cmdJudge(outDir: string, cfg?: RunConfig) {
   printBudget("judge cost", budget);
 }
 
+/** Run `fn` over every recorded conversation with bounded concurrency, writing one JSON per conversation. */
+async function forEachConversation<T extends { conversationId: string }>(
+  outDir: string,
+  sub: string,
+  fn: (rec: ConversationRecord) => Promise<T>,
+  onDone: (t: T) => void,
+): Promise<T[]> {
+  const convs = readJsonDir<ConversationRecord>(join(outDir, "conversations"));
+  const dir = join(outDir, sub);
+  mkdirSync(dir, { recursive: true });
+  const concurrency = Number(flag("concurrency") ?? 4);
+  const out: T[] = [];
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, convs.length) }, async () => {
+    while (next < convs.length) {
+      const rec = convs[next++]!;
+      const t = await fn(rec);
+      writeFileSync(join(dir, recordFileName(t.conversationId)), JSON.stringify(t, null, 2));
+      out.push(t);
+      onDone(t);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+async function cmdRegen(outDir: string, cfg?: RunConfig) {
+  const rulesOnly = process.argv.includes("--rules-only");
+  const spec = judgeSpec(cfg);
+  const budget = new BudgetTracker(cfg?.maxUsd);
+  const { provider: raw, model } = resolveProvider(spec);
+  const provider = trackedProvider(raw, budget);
+  console.log(`regen: classifying replies with ${rulesOnly ? "rules only" : `rules + ${raw.id}:${model ?? raw.defaultModel}`}`);
+  const records = await forEachConversation<RegenRecord>(
+    outDir,
+    "regen",
+    (rec) => classifyRegen(rec, { provider, model, rulesOnly }),
+    (r) => {
+      const top = Object.entries(r.counts)
+        .filter(([, n]) => n)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, n]) => `${k}x${n}`)
+        .join(" ");
+      console.log(`✓ ${r.conversationId}  trigger ${Math.round(r.triggerRate * 100)}%  ${top}`);
+    },
+  );
+  const md = regenToMarkdown(summariseRegen(records), `Regenerate-trigger mining · ${basename(outDir)}`);
+  writeFileSync(join(outDir, "regen.md"), md);
+  console.log(md);
+  if (!rulesOnly) printBudget("regen cost", budget);
+}
+
+async function cmdSafety(outDir: string, cfg?: RunConfig) {
+  const spec = judgeSpec(cfg);
+  const budget = new BudgetTracker(cfg?.maxUsd);
+  const { provider: raw, model } = resolveProvider(spec);
+  const provider = trackedProvider(raw, budget);
+  console.log(`safety: auditing marked passages with ${raw.id}:${model ?? raw.defaultModel}`);
+  const pct = (x: number) => (Number.isNaN(x) ? "–" : `${Math.round(x * 100)}%`);
+  const records = await forEachConversation<SafetyRecord>(
+    outDir,
+    "safety",
+    (rec) => auditSafety(rec, { provider, model }),
+    (r) => console.log(`✓ ${r.conversationId}  over-refusal ${pct(r.overRefusalRate)}  under-reaction ${pct(r.underReactionRate)}  violation ${pct(r.violationRate)}`),
+  );
+  const md = safetyToMarkdown(summariseSafety(records), `Safety vs immersion · ${basename(outDir)}`);
+  writeFileSync(join(outDir, "safety.md"), md);
+  console.log(md);
+  printBudget("safety cost", budget);
+}
+
+function hasSafetyChecks(cfg: RunConfig): boolean {
+  return cfg.scenarioIds.some((id) => findScenario(id).safetyChecks.length > 0);
+}
+
 function cmdReport(outDir: string) {
   const convs = readJsonDir<ConversationRecord>(join(outDir, "conversations"));
   const scores = readJsonDir<ScoreRecord>(join(outDir, "scores"));
@@ -129,7 +210,7 @@ function cmdReport(outDir: string) {
 async function main() {
   const [cmd, target] = process.argv.slice(2);
   if (!cmd || !target) {
-    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | all <config.json>");
+    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | regen <outDir> | safety <outDir> | all <config.json>");
     return;
   }
   switch (cmd) {
@@ -145,10 +226,18 @@ async function main() {
     case "report":
       cmdReport(resolve(target));
       break;
+    case "regen":
+      await cmdRegen(resolve(target));
+      break;
+    case "safety":
+      await cmdSafety(resolve(target));
+      break;
     case "all": {
       const cfg = await cmdRun(resolve(target));
       await cmdJudge(cfg.outDir, cfg);
       cmdReport(cfg.outDir);
+      await cmdRegen(cfg.outDir, cfg);
+      if (hasSafetyChecks(cfg)) await cmdSafety(cfg.outDir, cfg);
       break;
     }
     default:

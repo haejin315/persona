@@ -37,6 +37,13 @@ function defaultScript(messages: { role: string; content: string }[], call: numb
   const sys = messages[0]?.content ?? "";
   // Memory consolidation and judge prompts ask for JSON; give them JSON.
   if (/output JSON only|Respond with JSON/i.test(sys)) {
+    if (/press "regenerate"/i.test(sys)) {
+      const turns = (sys.match(/at turns ([\d, ]+),/)?.[1] ?? "").split(",").map((x) => Number(x.trim())).filter((n) => !Number.isNaN(n));
+      return JSON.stringify({ replies: turns.map((t, i) => ({ turn: t, labels: i === 0 ? ["generic"] : [], note: i === 0 ? "fake" : "" })) });
+    }
+    if (/You audit replies/i.test(sys)) {
+      return JSON.stringify({ replies: [] }); // every audited reply defaults to ok
+    }
     if (/long-term memory/i.test(sys)) {
       return JSON.stringify({ summary: "요약.", facts: [`fact-${call}`], relationship: { stage: "acquaintance", notes: [] } });
     }

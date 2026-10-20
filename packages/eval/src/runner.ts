@@ -25,23 +25,33 @@ export interface RunContext {
 export class ReplayIndex {
   constructor(private recs: ConversationRecord[], private armId?: string) {}
 
+  static conversationsDir(dir: string): string {
+    return basename(dir) === "conversations" ? dir : join(dir, "conversations");
+  }
+
+  /** Loads whatever recordings exist (none is fine: the source arm may be about to produce them). */
   static load(dir: string, armId?: string): ReplayIndex {
-    const convDir = basename(dir) === "conversations" ? dir : join(dir, "conversations");
-    if (!existsSync(convDir)) throw new Error(`replayFrom: no conversations in ${convDir}`);
-    const recs = readdirSync(convDir)
-      .filter((f) => f.endsWith(".json"))
-      .map((f) => JSON.parse(readFileSync(join(convDir, f), "utf8")) as ConversationRecord)
-      .filter((r) => !r.truncated);
+    const convDir = ReplayIndex.conversationsDir(dir);
+    const recs = existsSync(convDir)
+      ? readdirSync(convDir)
+          .filter((f) => f.endsWith(".json"))
+          .map((f) => JSON.parse(readFileSync(join(convDir, f), "utf8")) as ConversationRecord)
+          .filter((r) => !r.truncated)
+      : [];
     return new ReplayIndex(recs, armId);
   }
 
+  /** True when `armId` is the arm whose recordings are replayed (it runs with the simulator itself). */
+  isSourceArm(armId: string): boolean {
+    return this.armId === armId;
+  }
+
   /** The recording for this scenario and repeat: r-th matching recording, wrapping around. */
-  pick(scenarioId: string, repeat: number): ConversationRecord {
+  pick(scenarioId: string, repeat: number): ConversationRecord | undefined {
     const pool = this.recs
       .filter((r) => r.scenarioId === scenarioId && (!this.armId || r.arm.id === this.armId))
       .sort((a, b) => a.id.localeCompare(b.id));
-    if (!pool.length) throw new Error(`replayFrom: no recording for scenario ${scenarioId}${this.armId ? ` / arm ${this.armId}` : ""}`);
-    return pool[repeat % pool.length]!;
+    return pool.length ? pool[repeat % pool.length] : undefined;
   }
 }
 
@@ -86,16 +96,17 @@ export async function runConversation(
     model: chat.model,
     temperature: arm.temperature,
     persona: scenario.persona,
-    memory: { model: mem.model },
+    memory: { model: mem.model, ...(arm.memory ?? {}) },
   });
 
   let user: UserSource;
   let replayOf: string | undefined;
-  if (ctx.replay) {
-    const src = ctx.replay.pick(scenario.id, repeat);
+  const src = ctx.replay?.pick(scenario.id, repeat);
+  if (src) {
     user = new ScriptedUser(src);
     replayOf = src.id;
   } else {
+    if (ctx.replay && !ctx.replay.isSourceArm(arm.id)) throw new Error(`replayFrom: no recording for scenario ${scenario.id} to replay into arm ${arm.id}`);
     const sim = cfg.simulatorModel ? resolveProvider(cfg.simulatorModel) : chat;
     user = new UserSimulator(track(sim.provider), scenario, sim.model);
   }
@@ -166,24 +177,43 @@ export async function runMatrix(cfg: RunConfig, concurrency = 4, hooks: RunHooks
   mkdirSync(dir, { recursive: true });
   const skipped: ConversationRecord[] = [];
   const budget = ctx.budget ?? new BudgetTracker(cfg.maxUsd);
-  const replay = ctx.replay ?? (cfg.replayFrom ? ReplayIndex.load(cfg.replayFrom, cfg.replayArmId) : undefined);
+  const replaySrcDir = cfg.replayFrom ? ReplayIndex.conversationsDir(cfg.replayFrom) : undefined;
 
-  const jobs: Array<() => Promise<ConversationRecord>> = [];
+  // Self-replay: if the replay source arm is itself in `arms`, phase 1 runs it with the simulator
+  // and phase 2 replays its recordings into the other arms. Otherwise there is a single phase.
+  const sourceArm = cfg.replayArmId && cfg.arms.some((a) => a.id === cfg.replayArmId) ? cfg.replayArmId : undefined;
+  const phases: Array<Array<() => Promise<ConversationRecord>>> = [[], []];
+
   for (const sid of cfg.scenarioIds) {
     const scenario = findScenario(sid);
     for (const arm of cfg.arms) {
       for (let r = 0; r < cfg.repeats; r++) {
-        // Resume: a finished recording already on disk is reused (lets a run continue after a
-        // subscription usage-window limit without redoing paid work).
-        const existing = join(dir, recordFileName(`${scenario.id}__${arm.id}__r${r}`));
-        if (ctx.resume !== false && existsSync(existing)) {
-          const rec = JSON.parse(readFileSync(existing, "utf8")) as ConversationRecord;
-          if (!rec.truncated) {
+        const id = `${scenario.id}__${arm.id}__r${r}`;
+        const existing = join(dir, recordFileName(id));
+        if (ctx.resume !== false) {
+          // Resume: a finished recording already on disk is reused (lets a run continue after a
+          // subscription usage-window limit without redoing paid work).
+          let rec = existsSync(existing) ? (JSON.parse(readFileSync(existing, "utf8")) as ConversationRecord) : undefined;
+          // An identical (scenario, arm, repeat) recording in the replay source counts too, so a
+          // comparison config can list the source arm without regenerating it.
+          const srcFile = replaySrcDir ? join(replaySrcDir, recordFileName(id)) : undefined;
+          if (!rec && srcFile && existsSync(srcFile)) {
+            const cand = JSON.parse(readFileSync(srcFile, "utf8")) as ConversationRecord;
+            if (!cand.truncated && cand.arm.promptVersion === arm.promptVersion && cand.arm.model === arm.model) {
+              rec = cand;
+              writeFileSync(existing, JSON.stringify(rec, null, 2));
+            }
+          }
+          if (rec && !rec.truncated) {
             skipped.push(rec);
             continue;
           }
         }
-        jobs.push(async () => {
+        const phase = sourceArm && arm.id !== sourceArm ? 1 : 0;
+        phases[phase]!.push(async () => {
+          const replay =
+            ctx.replay ??
+            (cfg.replayFrom ? ReplayIndex.load(phase === 1 ? cfg.outDir : cfg.replayFrom, cfg.replayArmId) : undefined);
           const rec = await runConversation(scenario, arm, cfg, r, hooks, { budget, replay });
           writeFileSync(join(dir, recordFileName(rec.id)), JSON.stringify(rec, null, 2));
           return rec;
@@ -194,13 +224,16 @@ export async function runMatrix(cfg: RunConfig, concurrency = 4, hooks: RunHooks
 
   if (skipped.length) hooks.onSkip?.(skipped.map((r) => r.id));
   const results: ConversationRecord[] = [...skipped];
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
-    while (next < jobs.length && !budget.exceeded) {
-      const job = jobs[next++]!;
-      results.push(await job());
-    }
-  });
-  await Promise.all(workers);
+  for (const jobs of phases) {
+    if (!jobs.length) continue;
+    let next = 0;
+    const workers = Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
+      while (next < jobs.length && !budget.exceeded) {
+        const job = jobs[next++]!;
+        results.push(await job());
+      }
+    });
+    await Promise.all(workers);
+  }
   return results;
 }

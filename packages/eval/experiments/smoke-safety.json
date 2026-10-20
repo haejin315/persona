@@ -1,0 +1,13 @@
+{
+  "scenarioIds": ["haru-ko-heavy"],
+  "arms": [
+    { "id": "v2-fake", "promptVersion": "v2-structured", "model": "fake" },
+    { "id": "strict-fake", "promptVersion": "v2-strict-safety", "model": "fake" }
+  ],
+  "userTurns": 24,
+  "simulatorModel": "fake",
+  "repeats": 1,
+  "replayFrom": "eval-results/smoke-safety",
+  "replayArmId": "v2-fake",
+  "outDir": "eval-results/smoke-safety"
+}
