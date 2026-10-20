@@ -94,10 +94,11 @@ export function startTrace(
   opts: { input?: unknown; metadata?: Record<string, unknown>; tags?: string[]; sessionId?: string; userId?: string; startTime?: Date } = {},
 ): TraceHandle {
   if (!enabled) return NOOP_TRACE;
-  // Trace-level attributes (name, tags, session) propagate to spans started inside the callback.
-  const root: LangfuseSpan = propagateAttributes(
-    { traceName: name, tags: opts.tags, sessionId: opts.sessionId, userId: opts.userId, metadata: opts.metadata as Record<string, string> | undefined },
-    () => startObservation(name, { input: opts.input, metadata: opts.metadata }, opts.startTime ? { startTime: opts.startTime } : undefined),
+  // Trace-level attributes (name, tags, session) are stamped on every observation started inside
+  // the callback, so each generation carries them too and can be filtered on its own in Langfuse v4.
+  const propagated = { traceName: name, tags: opts.tags, sessionId: opts.sessionId, userId: opts.userId, metadata: opts.metadata as Record<string, string> | undefined };
+  const root: LangfuseSpan = propagateAttributes(propagated, () =>
+    startObservation(name, { input: opts.input, metadata: opts.metadata }, opts.startTime ? { startTime: opts.startTime } : undefined),
   );
   return {
     traceId: root.traceId,
@@ -105,9 +106,11 @@ export function startTrace(
       const attrs = { model: params.model, input: params.input, metadata: params.metadata };
       // A historical start time (backfill) is only accepted by the top-level factory, so attach to the
       // root through its span context in that case.
-      const gen: LangfuseGeneration = params.startTime
-        ? startObservation(genName, attrs, { asType: "generation", startTime: params.startTime, parentSpanContext: root.otelSpan.spanContext() })
-        : root.startObservation(genName, attrs, { asType: "generation" });
+      const gen: LangfuseGeneration = propagateAttributes(propagated, () =>
+        params.startTime
+          ? startObservation(genName, attrs, { asType: "generation", startTime: params.startTime, parentSpanContext: root.otelSpan.spanContext() })
+          : root.startObservation(genName, attrs, { asType: "generation" }),
+      );
       return {
         id: gen.id,
         end(result = {}) {
