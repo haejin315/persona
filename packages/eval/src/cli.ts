@@ -6,7 +6,7 @@
  *   npm run eval -- regen    eval-results/smoke [--judge spec] [--rules-only]   # regenerate-trigger mining (--rules-only keeps earlier LLM labels)
  *   npm run eval -- safety   eval-results/safety [--judge spec]                 # safety-vs-immersion audit
  *   npm run eval -- all      experiments/smoke.json          # run + judge + report + regen (+ safety if scenarios have checks)
- *   npm run eval -- backfill eval-results/prompt-version [more dirs…] [--include-fake] [--again]   # push recorded runs to Langfuse
+ *   npm run eval -- backfill eval-results/prompt-version [more dirs…] [--include-fake] [--again] [--match <regex>]   # push recorded runs to Langfuse
  *
  * Cost controls: `estimate` prints the expected bill before anything runs; `maxUsd` in the config
  * stops a run once billed cost passes the cap; `replayFrom` reuses recorded user turns; a judge
@@ -230,6 +230,7 @@ async function cmdBackfill(dirs: string[]) {
   if (!tracingEnabled()) throw new Error("backfill needs LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY (and LANGFUSE_BASE_URL)");
   const includeFake = process.argv.includes("--include-fake");
   const again = process.argv.includes("--again");
+  const match = flag("match") ? new RegExp(flag("match")!) : undefined;
   let traces = 0;
   let generations = 0;
   let scores = 0;
@@ -241,6 +242,7 @@ async function cmdBackfill(dirs: string[]) {
       const path = join(convDir, file);
       const rec = JSON.parse(readFileSync(path, "utf8")) as ConversationRecord;
       if (!includeFake && (rec.arm.model === "fake" || rec.arm.model.startsWith("fake:"))) continue;
+      if (match && !match.test(rec.id)) continue;
       if (rec.traceId && !again) continue;
       const started = new Date(rec.startedAt);
       const finished = new Date(rec.finishedAt);
