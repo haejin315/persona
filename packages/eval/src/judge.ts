@@ -52,7 +52,24 @@ function userTurnsBefore(turns: Turn[], turnIndex: number): number {
   return turns.slice(0, turnIndex + 1).filter((t) => t.role === "user").length;
 }
 
-function rubric(card: CharacterCard, scenario: Scenario, revealed: string[]): string {
+/**
+ * What the user actually said before a window, verbatim (actions stripped to keep it short). The
+ * scenario's scripted facts are not enough: the simulated user improvises details ("보리는 여섯 시
+ * 반에 깨워요") and a judge that only sees the script marks the character's correct recall of
+ * them as "invented". Found on the first real run, where every memory arm lost points for it.
+ */
+export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 6000): string {
+  const lines = turns
+    .filter((t) => t.role === "user" && t.index < beforeIndex)
+    .map((t) => `[turn ${t.index}] ${t.content.replace(/\*[^*]*\*/g, "").replace(/\s+/g, " ").trim()}`)
+    .filter((l) => l.length > 10);
+  let out = lines.join("\n");
+  // Keep the most recent part if it gets long; the window itself covers the latest turns anyway.
+  if (out.length > maxChars) out = "…\n" + out.slice(out.length - maxChars);
+  return out || "(nothing yet)";
+}
+
+function rubric(card: CharacterCard, scenario: Scenario, revealed: string[], userSaid: string): string {
   const st = card.style[scenario.lang]!;
   const name = card.name[scenario.lang] ?? card.id;
   return `You are grading replies written by an AI playing the character "${name}" in a ${LANG_NAME[scenario.lang]} roleplay with the user "${scenario.persona.name}".
@@ -74,6 +91,9 @@ SPEECH STYLE REQUIRED:
 
 FACTS THE USER HAS SHARED SO FAR (the character should remember these when relevant, and must not contradict them):
 ${revealed.length ? revealed.map((r) => `- ${r}`).join("\n") : "- (nothing yet)"}
+
+WHAT THE USER ACTUALLY SAID BEFORE THIS WINDOW (verbatim, speech only). Anything the character recalls from here is correct memory, not invention:
+${userSaid}
 
 Score each dimension 1–5 (5 = flawless, 3 = noticeable slips, 1 = broken):
 - consistency: identity, backstory, world rules and hard constraints respected; no out-of-character knowledge or abilities; does not narrate the user.
@@ -124,7 +144,7 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
     const prior = opts.reuse?.checkpoints.find((c) => c.turnIndex === endTurn.index);
     const parsed = prior
       ? { consistency: { score: prior.consistency, note: prior.notes.consistency }, memory: { score: prior.memory, note: prior.notes.memory }, style: { score: prior.style, note: prior.notes.style } }
-      : await askJson(opts.provider, opts.model, rubric(card, scenario, revealed), `TRANSCRIPT WINDOW (grade ${name}'s replies only):\n\n${transcript}`);
+      : await askJson(opts.provider, opts.model, rubric(card, scenario, revealed, userSaidBefore(rec.turns, firstIdx)), `TRANSCRIPT WINDOW (grade ${name}'s replies only):\n\n${transcript}`);
 
     const fmt = windowReplies.map((t) => formatScore(checkFormat(t.content, scenario.lang, scenario.persona)));
     const fmtMean = fmt.reduce((a, b) => a + b, 0) / fmt.length;

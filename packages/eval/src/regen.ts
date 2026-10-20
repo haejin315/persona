@@ -8,6 +8,7 @@
  */
 import { findCharacter, type CharacterCard, type LLMProvider, type Turn } from "@persona/engine";
 import { checkFormat } from "./format.js";
+import { userSaidBefore } from "./judge.js";
 import { findScenario } from "./scenarios.js";
 import { REGEN_REASONS, type ConversationRecord, type RegenReason, type RegenRecord, type RegenReply, type Scenario } from "./types.js";
 
@@ -111,6 +112,8 @@ ${characterSheet(card, scenario)}
 
 FACTS ${scenario.persona.name} HAS ALREADY TOLD ${name} EARLIER IN THE CONVERSATION (not shown in this excerpt; using them is correct recall, not out_of_character):
 ${revealed.length ? revealed.map((r) => `- ${r}`).join("\n") : "- (nothing yet)"}
+What ${scenario.persona.name} actually said before this excerpt (verbatim, speech only):
+${userSaidBefore(turns, Math.max(0, first - 5))}
 
 For each of ${name}'s replies at turns ${targets}, list every label that applies (empty list if the reply is fine):
 - ignores_user: does not respond to what the user just said, asked or did (answers a different question, skips an action the user took)
