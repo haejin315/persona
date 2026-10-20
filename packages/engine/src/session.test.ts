@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadAllCharacters } from "./characters.js";
 import { DEFAULT_MEMORY_CONFIG, MemoryManager } from "./memory/manager.js";
-import { PROMPT_VERSIONS } from "./prompt/builder.js";
+import { DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS } from "./prompt/builder.js";
 import type { LLMProvider } from "./providers/types.js";
 import { ChatSession } from "./session.js";
 import { emptyMemory, type Turn } from "./types.js";
@@ -81,7 +81,7 @@ describe("session", () => {
     expect(t.index).toBe(2);
     expect(t.role).toBe("character");
     expect(t.content).toBe("안녕");
-    expect(t.meta?.promptVersion).toBe("v2-structured");
+    expect(t.meta?.promptVersion).toBe(DEFAULT_PROMPT_VERSION);
     expect(t.meta?.usage?.promptTokens).toBe(10);
   });
 
