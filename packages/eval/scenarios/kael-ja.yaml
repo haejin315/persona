@@ -1,0 +1,53 @@
+# Fantasy / adventure, Japanese. Same beats as kael-ko so the KO→JA transfer can be compared on a
+# character whose register is the opposite of Haru's: タメ口, 一人称「俺」, mock-keigo only for sarcasm.
+id: kael-ja
+characterId: kael
+lang: ja
+persona:
+  name: リア
+  description: 22歳、グレイマークの商人の娘。剣を握ったことはないが頑固で観察力がある。全財産を使ってカエルを雇った。
+userStyle: >
+  タメ口に近い気楽な口調だが、最初は少し慎重。1〜3文。地の文を頻繁に使う（2回に1回）。
+  カエルの皮肉にひるまず聞き返す。怖くても顔に出さないようにする。
+
+beats:
+  - fromUserTurn: 1
+    goal: 出発直後。荷物を捨てろという言葉に反発しつつ、一部は捨てる。なぜそんなに高いのか聞く。自分の名前を言う。なぜエルドリンに行くかはまだ言わない。
+    reveal:
+      - リアの名前は「リア」だ
+      - リアはグレイマークの商人の娘だ
+  - fromUserTurn: 7
+    goal: ハーフムーンへの道。歩くのはつらいが耐える。カエルの過去を少しずつ探る。自分が持ってきた物の話をする。
+    reveal:
+      - リアは母が残した銀の指輪を首にかけている
+      - リアは地図が読める（商隊で習った）
+  - fromUserTurn: 15
+    goal: ハーフムーンの宿場で野営。カエルにようやくエルドリンに行く理由を言う。カエルの反応を見る。
+    reveal:
+      - リアの兄「ユアン」は三年前の灰色の霧で行方不明になり、リアは兄が生きていると信じている
+      - ユアンは当時、商隊の護衛隊にいた
+  - fromUserTurn: 25
+    goal: 沈黙の森の入口。補給が減る。カエルが道をためらうのに気づく。自分が地図を読めることをもう一度持ち出して手伝うと言う。
+    reveal:
+      - リアは食料が五日分残っていると数えた
+  - fromUserTurn: 36
+    goal: 森の中。危険な状況を一緒に乗り越える。カエルが寝言で誰かの名前を呼ぶのを聞いたと言う。カエルを少し信頼し始めたことを行動で見せる。
+    reveal:
+      - リアはカエルが寝言で「リアン」という名前を呼ぶのを聞いた
+
+probes:
+  - atUserTurn: 8
+    ask: カエルが自分の名前を覚えているか確認する（名前を直接言わない）。
+    expected: リア
+  - atUserTurn: 22
+    ask: 自分がなぜエルドリンに行くのかカエルがちゃんと分かっているか聞き返す（理由を直接言わない）。
+    expected: 行方不明の兄ユアンを探すため
+  - atUserTurn: 32
+    ask: 自分が首にかけているものが何か、誰のものかカエルが覚えているか聞く（答えを言わない）。
+    expected: 母の銀の指輪
+  - atUserTurn: 42
+    ask: 自分が食料は何日分残っていると言ったかカエルが覚えているか聞く。
+    expected: 五日分
+  - atUserTurn: 50
+    ask: 自分の兄の名前をカエルが覚えているか聞く（名前を直接言わない）。
+    expected: ユアン

@@ -35,7 +35,7 @@ describe("format checks", () => {
 describe("scenarios", () => {
   it("load and reference existing characters", () => {
     const ids = loadScenarios().map((s) => s.id).sort();
-    expect(ids).toEqual(["haru-ja", "haru-ko", "haru-ko-heavy", "haru-ko-long", "kael-ko", "kael-ko-battle"]);
+    expect(ids).toEqual(["haru-ja", "haru-ko", "haru-ko-heavy", "haru-ko-long", "kael-ja", "kael-ko", "kael-ko-battle"]);
     for (const s of loadScenarios()) {
       expect(s.beats[0]!.fromUserTurn).toBe(1);
       for (const p of s.probes) expect(p.expected).toBeTruthy();
