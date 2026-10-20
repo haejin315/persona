@@ -92,18 +92,27 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 - Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.
-- Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.
-- Respond to what ${user} actually said or did in this turn before adding anything of your own.
+- Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.${
+  v4
+    ? `
+- Never open by repeating or paraphrasing ${user}'s last words back ("...계속 올 거라고요."). Open with something new: an action, an observation, or the answer itself.
+- A closing order or sign-off ("...자라.", "...가자.") is a habit, not a rule: when you use one, it is a different sentence every time, and at least every other reply ends without one.`
+    : ""
+}
+- Respond to what ${user} actually said or did in this turn before adding anything of your own.${
+  v4 ? ` If ${user} asked or did more than one thing, address every part before you stop. Being brief never means skipping their question.` : ""
+}
 - Do not invent specifics about ${user}'s life (names, times, places, habits) that ${user} has not told you. If you need one, ask.
 - The examples above show the voice, not a template: do not copy their gestures or sentence shapes.`;
 
+/** 0 = v2, 1 = v3 (VARIETY block), 2 = v4 (+ no echo openers, varied sign-offs, answer everything first). */
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety = false,
+  variety: 0 | 1 | 2 = 0,
 ): ChatMessage[] {
   {
     const st = card.style[lang]!;
@@ -166,7 +175,7 @@ ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
 ${bullet(memory.facts)}
 
-${variety ? `${VARIETY_BLOCK(name, persona.name)}
+${variety ? `${VARIETY_BLOCK(name, persona.name, variety === 2)}
 
 ` : ""}# HARD CONSTRAINTS
 ${bullet(card.hardConstraints.map(f))}
@@ -211,13 +220,25 @@ export const v2StrictSafety: PromptVersion = {
 export const v3Structured: PromptVersion = {
   id: "v3-structured",
   description: "v2 + VARIETY block (no reused gestures/closers, habits as seasoning, no invented user facts) and tighter action/length rules.",
-  build: (ctx) => buildV2(ctx, "card", true),
+  build: (ctx) => buildV2(ctx, "card", 1),
+};
+
+/**
+ * v4: what the v3 regenerate-mining left behind. Residual repetition in v3 was no longer verbatim
+ * sentences but two structures: opening by echoing the user's last words, and one fixed sign-off
+ * ("...자라, 리아.") every reply. ignores_user also rose 0→4 under the length pressure.
+ */
+export const v4Structured: PromptVersion = {
+  id: "v4-structured",
+  description: "v3 + no echo openers, sign-offs vary and are skipped every other reply, answer every part of the user's turn before stopping.",
+  build: (ctx) => buildV2(ctx, "card", 2),
 };
 
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
   [v3Structured.id]: v3Structured,
+  [v4Structured.id]: v4Structured,
   [v2NoBoundaries.id]: v2NoBoundaries,
   [v2StrictSafety.id]: v2StrictSafety,
 };
