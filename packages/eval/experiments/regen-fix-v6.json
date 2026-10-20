@@ -6,7 +6,7 @@
   ],
   "userTurns": 50,
   "memoryModel": "claude-cli:haiku",
-  "repeats": 1,
+  "repeats": 2,
   "replayFrom": "eval-results/regen-fix-v4",
   "replayArmId": "v4-structured/sonnet",
   "judgeModel": "claude-cli:opus",

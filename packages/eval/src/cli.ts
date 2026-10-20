@@ -6,6 +6,7 @@
  *   npm run eval -- regen    eval-results/smoke [--judge spec] [--rules-only]   # regenerate-trigger mining (--rules-only keeps earlier LLM labels)
  *   npm run eval -- safety   eval-results/safety [--judge spec]                 # safety-vs-immersion audit
  *   npm run eval -- all      experiments/smoke.json          # run + judge + report + regen (+ safety if scenarios have checks)
+ *   npm run eval -- backfill eval-results/prompt-version [more dirs…] [--include-fake] [--again]   # push recorded runs to Langfuse
  *
  * Cost controls: `estimate` prints the expected bill before anything runs; `maxUsd` in the config
  * stops a run once billed cost passes the cap; `replayFrom` reuses recorded user turns; a judge
@@ -218,6 +219,94 @@ async function cmdSafety(outDir: string, cfg?: RunConfig) {
   printBudget("safety cost", budget);
 }
 
+/**
+ * Push recorded conversations (and their judge / regen / safety results) to Langfuse as traces with
+ * historical timestamps. For runs made before tracing existed, or for a new Langfuse project. Each
+ * character reply becomes a generation (input = the user's message, output = the reply; the full
+ * prompt is not stored in the record). The trace id is written back to the record so later
+ * `judge` / `regen` / `safety` runs attach their scores to the same trace.
+ */
+async function cmdBackfill(dirs: string[]) {
+  if (!tracingEnabled()) throw new Error("backfill needs LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY (and LANGFUSE_BASE_URL)");
+  const includeFake = process.argv.includes("--include-fake");
+  const again = process.argv.includes("--again");
+  let traces = 0;
+  let generations = 0;
+  let scores = 0;
+  for (const dir of dirs) {
+    const experiment = basename(dir);
+    const convDir = join(dir, "conversations");
+    if (!existsSync(convDir)) continue;
+    for (const file of readdirSync(convDir).filter((f) => f.endsWith(".json"))) {
+      const path = join(convDir, file);
+      const rec = JSON.parse(readFileSync(path, "utf8")) as ConversationRecord;
+      if (!includeFake && (rec.arm.model === "fake" || rec.arm.model.startsWith("fake:"))) continue;
+      if (rec.traceId && !again) continue;
+      const started = new Date(rec.startedAt);
+      const finished = new Date(rec.finishedAt);
+      const trace = startTrace(`eval:${rec.scenarioId}/${rec.arm.id}`, {
+        startTime: started,
+        input: { scenarioId: rec.scenarioId, arm: rec.arm, replayOf: rec.replayOf },
+        metadata: { experiment, scenarioId: rec.scenarioId, armId: rec.arm.id, promptVersion: rec.arm.promptVersion, model: rec.arm.model, backfill: "true" },
+        tags: [experiment, rec.scenarioId, rec.arm.id, rec.arm.promptVersion, rec.replayOf ? "replay" : "simulated", "backfill"],
+      });
+      let userTurn = 0;
+      let lastUser = "";
+      for (const t of rec.turns) {
+        if (t.role === "user") {
+          userTurn++;
+          lastUser = t.content;
+          continue;
+        }
+        if (t.index === 0 || !t.meta) continue;
+        const end = new Date(t.ts);
+        const start = new Date(t.ts - (t.meta.latencyMs ?? 0));
+        const gen = trace.generation("character", {
+          model: t.meta.model,
+          input: [{ role: "user", content: lastUser }],
+          metadata: { role: "character", userTurn, promptVersion: t.meta.promptVersion, fullPromptStored: false },
+          startTime: start,
+        });
+        gen.end({ output: t.content, usage: t.meta.usage, model: t.meta.model, latencyMs: t.meta.latencyMs, endTime: end });
+        generations++;
+      }
+      trace.update({ output: { turns: rec.turns.length, usage: rec.usage, simUsage: rec.simUsage, memoryUsage: rec.memoryUsage, costUsd: rec.costUsd, truncated: rec.truncated, memory: rec.memory } });
+      trace.end(finished);
+      traces++;
+
+      const scoreFile = join(dir, "scores", recordFileName(rec.id));
+      if (existsSync(scoreFile)) {
+        const s = JSON.parse(readFileSync(scoreFile, "utf8")) as ScoreRecord;
+        for (const m of ["consistency", "memory", "style", "format"] as const) scoreTrace(trace.traceId, m, s.mean[m], `judge ${s.judgeModel}`, finished);
+        scoreTrace(trace.traceId, "probe_recall", s.probeRecall, undefined, finished);
+        scores += 5;
+      }
+      const regenFile = join(dir, "regen", recordFileName(rec.id));
+      if (existsSync(regenFile)) {
+        const r = JSON.parse(readFileSync(regenFile, "utf8")) as RegenRecord;
+        scoreTrace(trace.traceId, "regen_trigger_rate", r.triggerRate, undefined, finished);
+        for (const [k, n] of Object.entries(r.counts)) if (n) scoreTrace(trace.traceId, `regen_${k}`, (100 * n) / Math.max(1, r.replies.length), "per 100 replies", finished);
+        scores++;
+      }
+      const safetyFile = join(dir, "safety", recordFileName(rec.id));
+      if (existsSync(safetyFile)) {
+        const sf = JSON.parse(readFileSync(safetyFile, "utf8")) as SafetyRecord;
+        scoreTrace(trace.traceId, "safety_over_refusal", sf.overRefusalRate, undefined, finished);
+        scoreTrace(trace.traceId, "safety_under_reaction", sf.underReactionRate, undefined, finished);
+        scoreTrace(trace.traceId, "safety_violation", sf.violationRate, undefined, finished);
+        scores += 3;
+      }
+      if (trace.traceId) {
+        rec.traceId = trace.traceId;
+        writeFileSync(path, JSON.stringify(rec, null, 2));
+      }
+      console.log(`✓ ${experiment}/${rec.id}`);
+    }
+  }
+  await flushTracing();
+  console.log(`backfill: ${traces} traces, ${generations} generations, ~${scores} score groups → ${process.env.LANGFUSE_BASE_URL ?? "http://localhost:3000"}`);
+}
+
 function hasSafetyChecks(cfg: RunConfig): boolean {
   return cfg.scenarioIds.some((id) => findScenario(id).safetyChecks.length > 0);
 }
@@ -234,7 +323,7 @@ async function main() {
   const [cmd, target] = process.argv.slice(2);
   if (initTracing({ environment: "eval" })) console.log(`tracing → Langfuse (${process.env.LANGFUSE_BASE_URL ?? "http://localhost:3000"})`);
   if (!cmd || !target) {
-    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | regen <outDir> | safety <outDir> | all <config.json>");
+    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | regen <outDir> | safety <outDir> | all <config.json> | backfill <outDir…>");
     return;
   }
   switch (cmd) {
@@ -255,6 +344,9 @@ async function main() {
       break;
     case "safety":
       await cmdSafety(resolve(target));
+      break;
+    case "backfill":
+      await cmdBackfill(process.argv.slice(3).filter((a) => !a.startsWith("--")).map((d) => resolve(d)));
       break;
     case "all": {
       const cfg = await cmdRun(resolve(target));

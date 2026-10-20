@@ -64,14 +64,22 @@ export interface TraceHandle {
   /** Langfuse trace id, stored on records so scores can be attached later. */
   traceId?: string;
   /** Child generation for one provider call; no-op when tracing is off. */
-  generation(name: string, params: { model?: string; input?: unknown; metadata?: Record<string, unknown> }): GenerationHandle;
+  generation(name: string, params: { model?: string; input?: unknown; metadata?: Record<string, unknown>; startTime?: Date }): GenerationHandle;
   update(params: { output?: unknown; metadata?: Record<string, unknown> }): void;
-  end(): void;
+  end(endTime?: Date): void;
 }
 
 export interface GenerationHandle {
   id?: string;
-  end(result?: { output?: unknown; usage?: { promptTokens: number; completionTokens: number; cachedPromptTokens?: number }; model?: string; latencyMs?: number; error?: string }): void;
+  end(result?: {
+    output?: unknown;
+    usage?: { promptTokens: number; completionTokens: number; cachedPromptTokens?: number };
+    model?: string;
+    latencyMs?: number;
+    error?: string;
+    /** Historical end time (backfill). */
+    endTime?: Date;
+  }): void;
 }
 
 const NOOP_GEN: GenerationHandle = { end() {} };
@@ -81,17 +89,25 @@ const NOOP_TRACE: TraceHandle = { generation: () => NOOP_GEN, update() {}, end()
  * Open a trace (root span) for one conversation or chat session. `metadata` and `tags` apply to
  * the trace; `sessionId` groups traces in the Langfuse UI.
  */
-export function startTrace(name: string, opts: { input?: unknown; metadata?: Record<string, unknown>; tags?: string[]; sessionId?: string; userId?: string } = {}): TraceHandle {
+export function startTrace(
+  name: string,
+  opts: { input?: unknown; metadata?: Record<string, unknown>; tags?: string[]; sessionId?: string; userId?: string; startTime?: Date } = {},
+): TraceHandle {
   if (!enabled) return NOOP_TRACE;
   // Trace-level attributes (name, tags, session) propagate to spans started inside the callback.
   const root: LangfuseSpan = propagateAttributes(
     { traceName: name, tags: opts.tags, sessionId: opts.sessionId, userId: opts.userId, metadata: opts.metadata as Record<string, string> | undefined },
-    () => startObservation(name, { input: opts.input, metadata: opts.metadata }),
+    () => startObservation(name, { input: opts.input, metadata: opts.metadata }, opts.startTime ? { startTime: opts.startTime } : undefined),
   );
   return {
     traceId: root.traceId,
     generation(genName, params) {
-      const gen: LangfuseGeneration = root.startObservation(genName, { model: params.model, input: params.input, metadata: params.metadata }, { asType: "generation" });
+      const attrs = { model: params.model, input: params.input, metadata: params.metadata };
+      // A historical start time (backfill) is only accepted by the top-level factory, so attach to the
+      // root through its span context in that case.
+      const gen: LangfuseGeneration = params.startTime
+        ? startObservation(genName, attrs, { asType: "generation", startTime: params.startTime, parentSpanContext: root.otelSpan.spanContext() })
+        : root.startObservation(genName, attrs, { asType: "generation" });
       return {
         id: gen.id,
         end(result = {}) {
@@ -109,15 +125,15 @@ export function startTrace(name: string, opts: { input?: unknown; metadata?: Rec
             level: result.error ? "ERROR" : undefined,
             statusMessage: result.error,
           });
-          gen.end();
+          gen.end(result.endTime);
         },
       };
     },
     update(params) {
       root.update(params);
     },
-    end() {
-      root.end();
+    end(endTime) {
+      root.end(endTime);
     },
   };
 }
@@ -168,8 +184,15 @@ export function observedProvider<P extends LLMProvider>(provider: P, trace: Trac
 }
 
 /** Attach a numeric or categorical score to a trace (no-op when tracing is off or traceId is missing). */
-export function scoreTrace(traceId: string | undefined, name: string, value: number | string, comment?: string): void {
+export function scoreTrace(traceId: string | undefined, name: string, value: number | string, comment?: string, timestamp?: Date): void {
   if (!enabled || !client || !traceId) return;
   if (typeof value === "number" && Number.isNaN(value)) return;
-  client.score.create({ traceId, name, value: value as never, comment, dataType: typeof value === "number" ? "NUMERIC" : "CATEGORICAL" });
+  client.score.create({
+    traceId,
+    name,
+    value: value as never,
+    comment,
+    dataType: typeof value === "number" ? "NUMERIC" : "CATEGORICAL",
+    ...(timestamp ? { timestamp: timestamp.toISOString() } : {}),
+  });
 }
