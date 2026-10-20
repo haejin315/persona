@@ -91,6 +91,18 @@ npm run eval -- judge  eval-results/model --format-only                    # 규
 
 채점은 생성 모델보다 상위 모델(opus)로 둔다. haiku 채점기는 1턴에 밝힌 이름을 두고 "듣기 전에 불렀다"고 깎는 오판을 했다. 같은 대화를 opus가 세 번 채점하면 일관성은 ±0.4, 기억·말투는 ±0.2 안에서 흔들린다.
 
+### 관측성 (Langfuse)
+
+`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`가 있으면 모든 LLM 호출이 [Langfuse](https://langfuse.com) 트레이스로 남는다. 없으면 전부 no-op이라 평가와 채팅은 그대로 돈다. 로컬은 공식 `docker-compose.yml`로 self-host(`http://localhost:3000`), 키는 `.env.example` 참고.
+
+| 단위 | 무엇이 남나 |
+|---|---|
+| 트레이스 | 대화 1개 (`eval:<scenario>/<arm>`, 채팅은 세션). 태그: 시나리오, arm, 프롬프트 버전, 리플레이/시뮬레이션 |
+| generation | 호출 1개. role(character · simulator · memory · judge · regen · safety), 유저 턴, 모델, 입력 메시지, 출력, 토큰(입력 · 캐시 · 출력), 지연 |
+| score | 채점 4지표 + 회상률, 재생성 사유별 100답장당 빈도, 안전 과잉 거부 · 과소 반응 · 위반율. 전부 그 대화의 트레이스에 붙는다 |
+
+그래서 "일관성 3점 이하"나 "regen_repetition > 50"으로 트레이스를 걸러 그 답장을 만든 프롬프트 전문을 바로 읽을 수 있다. 평가 결과 JSON(`eval-results/`)은 그대로 남고, Langfuse는 그 위의 탐색 도구다.
+
 ### 비용 통제
 
 | 장치 | 무엇 | 어디 |
@@ -109,6 +121,7 @@ npm run eval -- judge  eval-results/model --format-only                    # 규
 2. ~~유닛 이코노믹스 1 Pager → 모델 선택 기준~~
 3. ~~평가 파이프라인: 시뮬레이터, 채점, 리포트, 비용 통제~~
 4. ~~문제 6개 재현 실험 + 1 Pager (docs/02~07)~~
-5. 웹 데모 (TS 서버 + React): 현재 프롬프트, 기억 상태, 재생성 사유 판정을 보여주는 디버그 패널
-6. 반복 실험: 기억 사실 상한의 교체 정책, 카엘 일본어, Ollama 로컬 모델 arm
-7. docker-compose, GitHub Actions(typecheck · vitest · 오프라인 스모크), 배포
+5. ~~LLM 관측성: Langfuse 트레이스 + 점수~~
+6. 웹 데모 (TS 서버 + React): 현재 프롬프트, 기억 상태, 재생성 사유 판정을 보여주는 디버그 패널
+7. 반복 실험: v4 프롬프트 전후, 200턴 장기 실행, 기억 사실 상한의 교체 정책, 카엘 일본어, Ollama 로컬 모델 arm
+8. docker-compose, GitHub Actions(typecheck · vitest · 오프라인 스모크), 배포
