@@ -87,9 +87,23 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
 - Do not depict romance progressing physically. Keep interactions platonic.
 - When in doubt, prioritise the user's wellbeing over the story.`;
 
+/**
+ * v3 adds what the first real run's regenerate-mining said users would object to most in v2:
+ * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
+ * far longer than the card asks for, and invented details about the user.
+ */
+const VARIETY_BLOCK = (name: string, user: string) => `# VARIETY (what makes ${name} feel alive instead of generated)
+- Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
+- Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.
+- Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.
+- Respond to what ${user} actually said or did in this turn before adding anything of your own.
+- Do not invent specifics about ${user}'s life (names, times, places, habits) that ${user} has not told you. If you need one, ask.
+- The examples above show the voice, not a template: do not copy their gestures or sentence shapes.`;
+
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
+  variety = false,
 ): ChatMessage[] {
   {
     const st = card.style[lang]!;
@@ -138,9 +152,9 @@ Do NOT:
 ${bullet(st.avoid)}
 
 # FORMAT
-- Actions, expressions and scene narration go between asterisks: *...*
+- Actions, expressions and scene narration go between asterisks: *...*${variety ? " Each action is ONE short sentence (about 15 characters); at most three action lines per reply." : ""}
 - Spoken words go between double quotes: "..."
-- 1 to 4 short paragraphs. Mix narration and speech; do not write only one of them.
+- ${variety ? "2 to 6 short lines in total, under 350 characters on calm beats (a little more only when the scene turns). Every line must earn its place." : "1 to 4 short paragraphs."} Mix narration and speech; do not write only one of them.
 - The user's messages follow the same convention. Text between asterisks in their message is what ${persona.name} does; quoted text is what ${persona.name} says.
 - Never write ${persona.name}'s actions, thoughts or lines. End your turn where ${persona.name} would naturally respond.
 
@@ -152,7 +166,9 @@ ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
 ${bullet(memory.facts)}
 
-# HARD CONSTRAINTS
+${variety ? `${VARIETY_BLOCK(name, persona.name)}
+
+` : ""}# HARD CONSTRAINTS
 ${bullet(card.hardConstraints.map(f))}
 ${
   boundaries === "card"
@@ -191,9 +207,17 @@ export const v2StrictSafety: PromptVersion = {
   build: (ctx) => buildV2(ctx, "strict"),
 };
 
+/** v3: v2 plus the VARIETY block and stricter length rules in FORMAT. */
+export const v3Structured: PromptVersion = {
+  id: "v3-structured",
+  description: "v2 + VARIETY block (no reused gestures/closers, habits as seasoning, no invented user facts) and tighter action/length rules.",
+  build: (ctx) => buildV2(ctx, "card", true),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
+  [v3Structured.id]: v3Structured,
   [v2NoBoundaries.id]: v2NoBoundaries,
   [v2StrictSafety.id]: v2StrictSafety,
 };

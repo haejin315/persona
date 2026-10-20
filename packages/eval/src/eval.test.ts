@@ -18,6 +18,10 @@ describe("format checks", () => {
 
   it("flags a reply that narrates the user, lacks speech, or breaks character", () => {
     const r = `*민수가 고개를 끄덕인다.* 저는 AI 언어 모델이라 잘 모르겠어요`;
+    // Mentioning the user inside an action is not narrating them.
+    expect(checkFormat(`*컵을 든 채 민수를 본다. 민수 씨의 어깨가 젖어 있다.*
+
+"...비 오죠."`, "ko", persona).find((c) => c.id === "does_not_narrate_user")!.ok).toBe(true);
     const ids = checkFormat(r, "ko", persona).filter((c) => !c.ok).map((c) => c.id);
     expect(ids).toEqual(expect.arrayContaining(["has_speech", "does_not_narrate_user", "no_ai_disclaimer"]));
   });
@@ -133,16 +137,26 @@ describe("regenerate-trigger mining", () => {
 
   it("flags repetition, length and format failures by rule", async () => {
     const { ruleReasons } = await import("./regen.js");
+    const tic = "*한 박자 늦게, 건조하게.*";
     const prev = [`*컵을 내려놓는다.*
 
-"...네. 비가 많이 오네요. 우산은 챙기셨어요?"`];
+"...네. 비가 많이 오네요. 우산은 챙기셨어요?"
+
+${tic}`];
+    // Two verbatim sentences from recent replies → formulaic.
     expect(ruleReasons(`*컵을 내려놓는다.*
 
-"...네. 비가 많이 오네요. 우산은 챙기셨어요?"`, prev, sc)).toContain("repetition");
+"...네. 비가 많이 오네요. 우산은 챙기셨어요?"
+
+${tic}`, prev, sc)).toContain("repetition");
+    // One recurring tic alone is not a regenerate trigger.
+    expect(ruleReasons(`${tic}
+
+"오늘은 원두를 바꿨어요. 산미가 좀 있을 거예요."`, prev, sc)).not.toContain("repetition");
     expect(ruleReasons(`"네."`, prev, sc)).toEqual(expect.arrayContaining(["too_short", "format_broken"]));
     expect(ruleReasons(`*민수가 웃는다.*
 
-"${"길게 ".repeat(400)}"`, prev, sc)).toEqual(expect.arrayContaining(["too_long", "narrates_user"]));
+"${"길게 ".repeat(300)}"`, prev, sc)).toEqual(expect.arrayContaining(["too_long", "narrates_user"]));
     expect(ruleReasons(`*행주를 집는다.*
 
 "오늘은 원두를 바꿔봤어요. 산미가 좀 있을 거예요."`, prev, sc)).toEqual([]);

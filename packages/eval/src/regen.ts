@@ -18,9 +18,11 @@ export interface RegenOptions {
   window?: number;
   /** Skip the LLM pass (rules only). */
   rulesOnly?: boolean;
+  /** Reuse LLM labels from an earlier record (e.g. when only the rules changed). */
+  reuse?: RegenRecord;
 }
 
-const LLM_REASONS: RegenReason[] = ["ignores_user", "repetition", "out_of_character", "generic"];
+const LLM_REASONS: RegenReason[] = ["ignores_user", "repetition", "out_of_character", "generic", "narrates_user"];
 const LANG_NAME = { ko: "Korean", ja: "Japanese", en: "English" } as const;
 
 /** Character bigram Jaccard similarity, ignoring whitespace and format marks. */
@@ -53,15 +55,18 @@ export function ruleReasons(reply: string, previous: string[], scenario: Pick<Sc
   if (!checks.does_not_narrate_user) out.add("narrates_user");
   if (!checks.no_wrong_script) out.add("language_mix");
   if (!checks.no_ai_disclaimer) out.add("ai_disclaimer");
-  if (!checks.not_too_long || !checks.length_1_to_5_paragraphs) out.add("too_long");
+  if (!checks.not_too_long || !checks.length_max_12_lines) out.add("too_long");
   if (reply.replace(/[\s*"]/g, "").length < 20) out.add("too_short");
 
   const prev = previous.slice(-5);
   if (prev.length) {
     const last = prev[prev.length - 1]!;
     if (similarity(reply, last) >= 0.45) out.add("repetition");
+    // One recurring stage direction is a verbal tic; two or more verbatim sentences from the last
+    // five replies is the formulaic reply users regenerate (calibrated on the first real run,
+    // where a single repeated "*한 박자 늦게.*" line fired on 70% of otherwise fine replies).
     const prevSentences = new Set(prev.flatMap(sentences));
-    if (sentences(reply).some((s) => prevSentences.has(s))) out.add("repetition");
+    if (sentences(reply).filter((s) => prevSentences.has(s)).length >= 2) out.add("repetition");
     // Same opening beat three replies in a row ("*컵을 내려놓는다.*" every time).
     const opening = (s: string) => s.trim().slice(0, 14);
     if (prev.length >= 2 && prev.slice(-2).every((p) => opening(p) === opening(reply))) out.add("repetition");
@@ -74,7 +79,8 @@ function characterSheet(card: CharacterCard, scenario: Scenario): string {
   return `Role: ${card.identity.role}
 Personality: ${card.identity.personality.join("; ")}
 World rules: ${card.world.rules.join("; ")}
-Speech: ${st.summary} Politeness: ${st.politeness} Avoid: ${st.avoid.join("; ")}`;
+Speech: ${st.summary} Politeness: ${st.politeness} Avoid: ${st.avoid.join("; ")}
+Signature habits (expected, not repetition by themselves): ${st.quirks.join("; ")}`;
 }
 
 async function llmReasons(
@@ -101,9 +107,10 @@ ${characterSheet(card, scenario)}
 
 For each of ${name}'s replies at turns ${targets}, list every label that applies (empty list if the reply is fine):
 - ignores_user: does not respond to what the user just said, asked or did (answers a different question, skips an action the user took)
-- repetition: repeats a sentence, image, gesture or structure from ${name}'s earlier replies in this excerpt, or restates something already said
+- repetition: a whole sentence, image, gesture, closing line or reply structure recurs from ${name}'s earlier replies in this excerpt, or something already said is restated. The signature habits above are allowed; label them only when the same habit appears in 3+ consecutive replies or is used verbatim as filler
 - out_of_character: contradicts the character sheet, world rules or speech style; knows things it cannot know; narrates the user's inner state
 - generic: non-committal filler that neither answers nor moves the scene (vague agreement, repeating the user's words back, a question with no content)
+- narrates_user: writes actions, lines, thoughts or feelings for ${scenario.persona.name} that the user did not write (looking at or reacting to the user is fine)
 
 Be strict but fair: label only what a demanding reader would actually object to. Respond with JSON only:
 {"replies":[{"turn":n,"labels":["..."],"note":"≤15 words, the specific problem"}]}`;
@@ -135,7 +142,9 @@ export async function classifyRegen(rec: ConversationRecord, opts: RegenOptions)
   const charTurns = rec.turns.filter((t) => t.role === "character" && t.index > 0);
 
   const llm = new Map<number, { reasons: RegenReason[]; note?: string }>();
-  if (!opts.rulesOnly) {
+  if (opts.reuse) {
+    for (const r of opts.reuse.replies) llm.set(r.turnIndex, { reasons: r.byLlm, note: r.note });
+  } else if (!opts.rulesOnly) {
     for (let i = 0; i < charTurns.length; i += window) {
       const w = charTurns.slice(i, i + window);
       for (const [k, v] of await llmReasons(opts, card, scenario, rec.turns, w)) llm.set(k, v);
@@ -159,7 +168,7 @@ export async function classifyRegen(rec: ConversationRecord, opts: RegenOptions)
     conversationId: rec.id,
     scenarioId: rec.scenarioId,
     armId: rec.arm.id,
-    classifierModel: opts.rulesOnly ? "rules" : (opts.model ?? opts.provider.defaultModel),
+    classifierModel: opts.reuse ? opts.reuse.classifierModel : opts.rulesOnly ? "rules" : (opts.model ?? opts.provider.defaultModel),
     replies,
     triggerRate: replies.length ? replies.filter((r) => r.reasons.length).length / replies.length : NaN,
     counts,

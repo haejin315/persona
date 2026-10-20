@@ -173,7 +173,7 @@ export const REGEN_REASONS = {
   narrates_user: "유저 대신 서술: 유저의 행동·대사·감정을 캐릭터가 써 버린다",
   repetition: "반복: 직전 답장들의 문장·표현·구조를 되풀이한다",
   too_short: "너무 짧음: 장면이 진행되지 않는 한 줄 답장",
-  too_long: "너무 긺: 5단락 또는 900자를 넘는 답장",
+  too_long: "너무 긺: 12줄 또는 600자를 넘는 답장",
   out_of_character: "캐릭터 이탈: 설정·말투·세계관에 어긋난다",
   format_broken: "형식 깨짐: 지문(*…*)이나 대사(\"…\")가 빠졌다",
   language_mix: "언어 혼입: 다른 문자 체계가 섞였다",

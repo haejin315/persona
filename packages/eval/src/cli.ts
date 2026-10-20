@@ -1,9 +1,9 @@
 /**
  *   npm run eval -- estimate experiments/prompt-version.json [--judge spec] [--from <outDir>]
  *   npm run eval -- run      experiments/smoke.json          # generate conversations (resumes; --fresh redoes)
- *   npm run eval -- judge    eval-results/smoke [--judge fake|openai:gpt-5|claude-cli:sonnet]
+ *   npm run eval -- judge    eval-results/smoke [--judge fake|openai:gpt-5|claude-cli:sonnet] [--format-only]
  *   npm run eval -- report   eval-results/smoke
- *   npm run eval -- regen    eval-results/smoke [--judge spec] [--rules-only]   # regenerate-trigger mining
+ *   npm run eval -- regen    eval-results/smoke [--judge spec] [--rules-only]   # regenerate-trigger mining (--rules-only keeps earlier LLM labels)
  *   npm run eval -- safety   eval-results/safety [--judge spec]                 # safety-vs-immersion audit
  *   npm run eval -- all      experiments/smoke.json          # run + judge + report + regen (+ safety if scenarios have checks)
  *
@@ -105,13 +105,16 @@ async function cmdJudge(outDir: string, cfg?: RunConfig) {
   const scoreDir = join(outDir, "scores");
   mkdirSync(scoreDir, { recursive: true });
   const concurrency = Number(flag("concurrency") ?? 4);
-  console.log(`judge: ${convs.length} conversations with ${raw.id}:${model ?? raw.defaultModel} (concurrency ${concurrency})`);
+  const formatOnly = process.argv.includes("--format-only");
+  console.log(`judge: ${convs.length} conversations with ${formatOnly ? "earlier LLM scores (format recomputed)" : `${raw.id}:${model ?? raw.defaultModel}`} (concurrency ${concurrency})`);
 
   let next = 0;
   const workers = Array.from({ length: Math.min(concurrency, convs.length) }, async () => {
     while (next < convs.length) {
       const rec = convs[next++]!;
-      const score = await judgeConversation(rec, { provider, model });
+      const priorFile = join(scoreDir, recordFileName(rec.id));
+      const reuse = formatOnly && existsSync(priorFile) ? (JSON.parse(readFileSync(priorFile, "utf8")) as ScoreRecord) : undefined;
+      const score = await judgeConversation(rec, { provider, model, reuse });
       writeFileSync(join(scoreDir, recordFileName(rec.id)), JSON.stringify(score, null, 2));
       const m = score.mean;
       console.log(
@@ -159,7 +162,11 @@ async function cmdRegen(outDir: string, cfg?: RunConfig) {
   const records = await forEachConversation<RegenRecord>(
     outDir,
     "regen",
-    (rec) => classifyRegen(rec, { provider, model, rulesOnly }),
+    (rec) => {
+      const priorFile = join(outDir, "regen", recordFileName(rec.id));
+      const reuse = rulesOnly && existsSync(priorFile) ? (JSON.parse(readFileSync(priorFile, "utf8")) as RegenRecord) : undefined;
+      return classifyRegen(rec, { provider, model, rulesOnly, reuse });
+    },
     (r) => {
       const top = Object.entries(r.counts)
         .filter(([, n]) => n)

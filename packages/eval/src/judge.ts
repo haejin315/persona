@@ -10,6 +10,8 @@ export interface JudgeOptions {
   every?: number;
   /** Replies per window shown to the judge. */
   window?: number;
+  /** Reuse the LLM scores and probe verdicts of an earlier record; only the rule-based format score is recomputed. */
+  reuse?: ScoreRecord;
 }
 
 const LANG_NAME: Record<Lang, string> = { ko: "Korean", ja: "Japanese", en: "English" };
@@ -93,7 +95,10 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
       .join("\n\n");
 
     const revealed = revealedBy(scenario, userTurnsBefore(rec.turns, endTurn.index));
-    const parsed = await askJson(opts.provider, opts.model, rubric(card, scenario, revealed), `TRANSCRIPT WINDOW (grade ${name}'s replies only):\n\n${transcript}`);
+    const prior = opts.reuse?.checkpoints.find((c) => c.turnIndex === endTurn.index);
+    const parsed = prior
+      ? { consistency: { score: prior.consistency, note: prior.notes.consistency }, memory: { score: prior.memory, note: prior.notes.memory }, style: { score: prior.style, note: prior.notes.style } }
+      : await askJson(opts.provider, opts.model, rubric(card, scenario, revealed), `TRANSCRIPT WINDOW (grade ${name}'s replies only):\n\n${transcript}`);
 
     const fmt = windowReplies.map((t) => formatScore(checkFormat(t.content, scenario.lang, scenario.persona)));
     const fmtMean = fmt.reduce((a, b) => a + b, 0) / fmt.length;
@@ -113,8 +118,8 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
   }
 
   // Recall probes: the character reply right after the probe's user turn.
-  const probes: ProbeResult[] = [];
-  for (const p of scenario.probes) {
+  const probes: ProbeResult[] = opts.reuse ? [...opts.reuse.probes] : [];
+  for (const p of opts.reuse ? [] : scenario.probes) {
     if (p.atUserTurn > rec.turns.filter((t) => t.role === "user").length) continue;
     let seen = 0;
     let answer = "";
@@ -142,7 +147,7 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
     conversationId: rec.id,
     scenarioId: rec.scenarioId,
     armId: rec.arm.id,
-    judgeModel: opts.model ?? opts.provider.defaultModel,
+    judgeModel: opts.reuse?.judgeModel ?? opts.model ?? opts.provider.defaultModel,
     checkpoints,
     probes,
     mean,
