@@ -92,7 +92,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 - Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.
 - Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.${
@@ -105,7 +105,12 @@ const VARIETY_BLOCK = (name: string, user: string, v4: boolean) => `# VARIETY (w
 - Respond to what ${user} actually said or did in this turn before adding anything of your own.${
   v4 ? ` If ${user} asked or did more than one thing, address every part before you stop. Being brief never means skipping their question.` : ""
 }
-- Do not invent specifics about ${user}'s life (names, times, places, habits) that ${user} has not told you. If you need one, ask.
+- Do not invent specifics about ${user}'s life (names, times, places, habits) that ${user} has not told you. If you need one, ask.${
+  v5
+    ? `
+- Show that you listened: when something ${user} told you earlier fits the moment (a name, a plan, a worry, a small detail from MEMORY or the conversation), use it - once per reply, in passing, the way a person who remembers would, never as a list or a quiz.`
+    : ""
+}
 - The examples above show the voice, not a template: do not copy their gestures or sentence shapes.`;
 
 /** 0 = v2, 1 = v3 (VARIETY block), 2 = v4 (+ no echo openers, varied sign-offs, answer everything first). */
@@ -132,7 +137,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 = 0,
+  variety: 0 | 1 | 2 | 3 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -200,7 +205,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety === 2)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety === 3)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -303,11 +308,23 @@ export const v3Recent: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 1, true, true),
 };
 
+/**
+ * v5: v4 + "show that you listened". v3/v4 kept probe recall but lost ~0.5 on the judge's memory
+ * score versus v2: shorter replies stopped weaving remembered facts into the scene. One remembered
+ * detail per reply, in passing.
+ */
+export const v5Structured: PromptVersion = {
+  id: "v5-structured",
+  description: "v4 + use one remembered detail per reply in passing (recover the memory score lost to brevity).",
+  build: (ctx) => buildV2(ctx, "card", 3),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
   [v3Structured.id]: v3Structured,
   [v4Structured.id]: v4Structured,
+  [v5Structured.id]: v5Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
