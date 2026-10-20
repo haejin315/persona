@@ -12,6 +12,7 @@
  * spec of `claude-cli:<model>` grades through the Claude Code subscription instead of API credit.
  */
 import "dotenv/config";
+import { flushTracing, initTracing, observedProvider, scoreTrace, startTrace, tracingEnabled, type LLMProvider } from "@persona/engine";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { BudgetTracker, trackedProvider } from "./budget.js";
@@ -114,7 +115,12 @@ async function cmdJudge(outDir: string, cfg?: RunConfig) {
       const rec = convs[next++]!;
       const priorFile = join(scoreDir, recordFileName(rec.id));
       const reuse = formatOnly && existsSync(priorFile) ? (JSON.parse(readFileSync(priorFile, "utf8")) as ScoreRecord) : undefined;
-      const score = await judgeConversation(rec, { provider, model, reuse });
+      const trace = startTrace(`judge:${rec.id}`, { metadata: { conversationId: rec.id, armId: rec.arm.id, judge: spec }, tags: ["judge", rec.scenarioId, rec.arm.id] });
+      const score = await judgeConversation(rec, { provider: observedProvider(provider, trace, "judge"), model, reuse });
+      trace.update({ output: { mean: score.mean, probeRecall: score.probeRecall } });
+      trace.end();
+      for (const m of ["consistency", "memory", "style", "format"] as const) scoreTrace(rec.traceId, m, score.mean[m]);
+      scoreTrace(rec.traceId, "probe_recall", score.probeRecall);
       writeFileSync(join(scoreDir, recordFileName(rec.id)), JSON.stringify(score, null, 2));
       const m = score.mean;
       console.log(
@@ -130,8 +136,8 @@ async function cmdJudge(outDir: string, cfg?: RunConfig) {
 async function forEachConversation<T extends { conversationId: string }>(
   outDir: string,
   sub: string,
-  fn: (rec: ConversationRecord) => Promise<T>,
-  onDone: (t: T) => void,
+  fn: (rec: ConversationRecord, traced: (p: LLMProvider) => LLMProvider) => Promise<T>,
+  onDone: (t: T, rec: ConversationRecord) => void,
 ): Promise<T[]> {
   const convs = readJsonDir<ConversationRecord>(join(outDir, "conversations"));
   const dir = join(outDir, sub);
@@ -142,10 +148,13 @@ async function forEachConversation<T extends { conversationId: string }>(
   const workers = Array.from({ length: Math.min(concurrency, convs.length) }, async () => {
     while (next < convs.length) {
       const rec = convs[next++]!;
-      const t = await fn(rec);
+      const trace = startTrace(`${sub}:${rec.id}`, { metadata: { conversationId: rec.id, armId: rec.arm.id }, tags: [sub, rec.scenarioId, rec.arm.id] });
+      const t = await fn(rec, (p) => observedProvider(p, trace, sub));
+      trace.update({ output: t });
+      trace.end();
       writeFileSync(join(dir, recordFileName(t.conversationId)), JSON.stringify(t, null, 2));
       out.push(t);
-      onDone(t);
+      onDone(t, rec);
     }
   });
   await Promise.all(workers);
@@ -162,12 +171,14 @@ async function cmdRegen(outDir: string, cfg?: RunConfig) {
   const records = await forEachConversation<RegenRecord>(
     outDir,
     "regen",
-    (rec) => {
+    (rec, traced) => {
       const priorFile = join(outDir, "regen", recordFileName(rec.id));
       const reuse = rulesOnly && existsSync(priorFile) ? (JSON.parse(readFileSync(priorFile, "utf8")) as RegenRecord) : undefined;
-      return classifyRegen(rec, { provider, model, rulesOnly, reuse });
+      return classifyRegen(rec, { provider: traced(provider), model, rulesOnly, reuse });
     },
-    (r) => {
+    (r, rec) => {
+      scoreTrace(rec.traceId, "regen_trigger_rate", r.triggerRate);
+      for (const [k, n] of Object.entries(r.counts)) if (n) scoreTrace(rec.traceId, `regen_${k}`, (100 * n) / Math.max(1, r.replies.length), "per 100 replies");
       const top = Object.entries(r.counts)
         .filter(([, n]) => n)
         .sort((a, b) => b[1] - a[1])
@@ -193,8 +204,13 @@ async function cmdSafety(outDir: string, cfg?: RunConfig) {
   const records = await forEachConversation<SafetyRecord>(
     outDir,
     "safety",
-    (rec) => auditSafety(rec, { provider, model }),
-    (r) => console.log(`✓ ${r.conversationId}  over-refusal ${pct(r.overRefusalRate)}  under-reaction ${pct(r.underReactionRate)}  violation ${pct(r.violationRate)}`),
+    (rec, traced) => auditSafety(rec, { provider: traced(provider), model }),
+    (r, rec) => {
+      scoreTrace(rec.traceId, "safety_over_refusal", r.overRefusalRate);
+      scoreTrace(rec.traceId, "safety_under_reaction", r.underReactionRate);
+      scoreTrace(rec.traceId, "safety_violation", r.violationRate);
+      console.log(`✓ ${r.conversationId}  over-refusal ${pct(r.overRefusalRate)}  under-reaction ${pct(r.underReactionRate)}  violation ${pct(r.violationRate)}`);
+    },
   );
   const md = safetyToMarkdown(summariseSafety(records), `Safety vs immersion · ${basename(outDir)}`);
   writeFileSync(join(outDir, "safety.md"), md);
@@ -216,6 +232,7 @@ function cmdReport(outDir: string) {
 
 async function main() {
   const [cmd, target] = process.argv.slice(2);
+  if (initTracing({ environment: "eval" })) console.log(`tracing → Langfuse (${process.env.LANGFUSE_BASE_URL ?? "http://localhost:3000"})`);
   if (!cmd || !target) {
     console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | regen <outDir> | safety <outDir> | all <config.json>");
     return;
@@ -252,7 +269,10 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e instanceof Error ? e.stack ?? e.message : e);
-  process.exit(1);
-});
+main()
+  .then(() => flushTracing())
+  .catch(async (e) => {
+    console.error(e instanceof Error ? e.stack ?? e.message : e);
+    if (tracingEnabled()) await flushTracing();
+    process.exit(1);
+  });

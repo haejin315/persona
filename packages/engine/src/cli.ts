@@ -11,6 +11,7 @@ import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { findCharacter, loadAllCharacters } from "./characters.js";
+import { flushTracing, initTracing, observedProvider, startTrace } from "./observability/langfuse.js";
 import { DEFAULT_MODEL_SPEC, providerFromSpec } from "./providers/index.js";
 import { ChatSession } from "./session.js";
 import type { Lang, Turn, UserPersona } from "./types.js";
@@ -45,13 +46,19 @@ async function main() {
   }
 
   const card = findCharacter(characterId);
-  const { provider, model } = providerFromSpec(modelSpec);
-  const mem = process.env.MEMORY_MODEL ? providerFromSpec(process.env.MEMORY_MODEL) : { provider, model };
+  const { provider: rawProvider, model } = providerFromSpec(modelSpec);
+  const mem = process.env.MEMORY_MODEL ? providerFromSpec(process.env.MEMORY_MODEL) : { provider: rawProvider, model };
+  // One Langfuse trace per chat session when LANGFUSE_* is set (otherwise no-op).
+  const traced = initTracing({ environment: "chat" });
+  const sessionId = `chat-${Date.now().toString(36)}`;
+  const trace = startTrace(`chat:${card.id}`, { sessionId, metadata: { characterId: card.id, lang, model: modelSpec, promptVersion: promptVersion ?? "default" }, tags: [card.id, lang] });
+  let turnNow = 0;
+  const provider = observedProvider(rawProvider, trace, "character", () => ({ userTurn: turnNow }));
   const session = new ChatSession({
     card,
     lang,
     provider,
-    memoryProvider: mem.provider,
+    memoryProvider: observedProvider(mem.provider, trace, "memory", () => ({ userTurn: turnNow })),
     promptVersion,
     model,
     persona,
@@ -59,7 +66,7 @@ async function main() {
   });
 
   const name = card.name[lang] ?? card.id;
-  console.log(`\n[${provider.id}:${model ?? provider.defaultModel}] [${session.promptVersion.id}] ${name} ↔ ${session.persona.name}\n`);
+  console.log(`\n[${provider.id}:${model ?? provider.defaultModel}] [${session.promptVersion.id}] ${name} ↔ ${session.persona.name}${traced ? `  (traced: ${sessionId})` : ""}\n`);
   console.log(`${name}: ${session.open().content}\n`);
 
   const printTurn = (t: Turn) => {
@@ -83,6 +90,7 @@ async function main() {
     const line = (await rl.question(`${session.persona.name}: `)).trim();
     if (!line) continue;
     if (line === "/quit") break;
+    turnNow++;
     if (line === "/memory") {
       console.log(JSON.stringify(session.memory, null, 2));
       continue;
@@ -106,6 +114,9 @@ async function main() {
     await streamReply(session.sendStream(line));
   }
   rl.close();
+  trace.update({ output: { turns: session.turns.length, memory: session.memory } });
+  trace.end();
+  await flushTracing();
 }
 
 main().catch((e) => {

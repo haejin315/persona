@@ -127,6 +127,8 @@ export interface ConversationRecord {
   replayOf?: string;
   /** Set when the run stopped early (budget cap) — fewer user turns than configured. */
   truncated?: boolean;
+  /** Langfuse trace id when tracing was enabled during the run (scores are attached to it later). */
+  traceId?: string;
   startedAt: string;
   finishedAt: string;
 }

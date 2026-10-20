@@ -1,4 +1,4 @@
-import { ChatSession, findCharacter, type TokenUsage } from "@persona/engine";
+import { ChatSession, findCharacter, observedProvider, startTrace, type LLMProvider, type TokenUsage } from "@persona/engine";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BudgetExceededError, BudgetTracker, trackedProvider } from "./budget.js";
@@ -79,13 +79,24 @@ export async function runConversation(
 ): Promise<ConversationRecord> {
   const card = findCharacter(scenario.characterId);
   const budget = ctx.budget ?? new BudgetTracker();
-  const track = <P extends { generate: Function; stream: Function; id: string; defaultModel: string }>(p: P) => trackedProvider(p, budget);
+  const id = `${scenario.id}__${arm.id}__r${repeat}`;
+
+  // One Langfuse trace per conversation (no-op without credentials); every provider call below
+  // becomes a generation tagged with its role and the current user turn.
+  let userTurnNow = 0;
+  const trace = startTrace(`eval:${scenario.id}/${arm.id}`, {
+    input: { scenarioId: scenario.id, arm, repeat, userTurns: cfg.userTurns },
+    metadata: { scenarioId: scenario.id, armId: arm.id, promptVersion: arm.promptVersion, model: arm.model, repeat: String(repeat) },
+    tags: [scenario.id, arm.id, arm.promptVersion, ctx.replay ? "replay" : "simulated"],
+  });
+  const track = (p: LLMProvider, role: string): LLMProvider =>
+    observedProvider(trackedProvider(p, budget), trace, role, () => ({ userTurn: userTurnNow }));
 
   const chat = resolveProvider(arm.model);
-  const chatProvider = track(chat.provider);
+  const chatProvider = track(chat.provider, "character");
   // Memory consolidation: its own spec (e.g. "claude-cli:haiku"), else the character's provider.
-  const mem = chat.provider.id === "fake" || !cfg.memoryModel ? { provider: chatProvider, model: undefined } : resolveProvider(cfg.memoryModel);
-  const memoryProvider = mem.provider === chatProvider ? chatProvider : track(mem.provider);
+  const mem = chat.provider.id === "fake" || !cfg.memoryModel ? { provider: chat.provider, model: undefined } : resolveProvider(cfg.memoryModel);
+  const memoryProvider = track(mem.provider, "memory");
 
   const session = new ChatSession({
     card,
@@ -108,11 +119,10 @@ export async function runConversation(
   } else {
     if (ctx.replay && !ctx.replay.isSourceArm(arm.id)) throw new Error(`replayFrom: no recording for scenario ${scenario.id} to replay into arm ${arm.id}`);
     const sim = cfg.simulatorModel ? resolveProvider(cfg.simulatorModel) : chat;
-    user = new UserSimulator(track(sim.provider), scenario, sim.model);
+    user = new UserSimulator(track(sim.provider, "simulator"), scenario, sim.model);
   }
 
   const name = card.name[scenario.lang] ?? card.id;
-  const id = `${scenario.id}__${arm.id}__r${repeat}`;
   const startedAt = new Date().toISOString();
   const totalTurns = user.length !== undefined ? Math.min(cfg.userTurns, user.length) : cfg.userTurns;
 
@@ -123,6 +133,7 @@ export async function runConversation(
   let charModel = chat.model ?? chat.provider.defaultModel;
 
   for (let userTurn = 1; userTurn <= totalTurns; userTurn++) {
+    userTurnNow = userTurn;
     try {
       const msg = await user.next(userTurn, session.turns, name);
       addUsage(simUsage, msg.usage, msg.model);
@@ -161,9 +172,12 @@ export async function runConversation(
     costUsd,
     ...(replayOf ? { replayOf } : {}),
     ...(truncated ? { truncated } : {}),
+    ...(trace.traceId ? { traceId: trace.traceId } : {}),
     startedAt,
     finishedAt: new Date().toISOString(),
   };
+  trace.update({ output: { turns: session.turns.length, usage, simUsage, memoryUsage, costUsd, truncated, memory: session.memory } });
+  trace.end();
   hooks.onConversation?.(rec);
   return rec;
 }
