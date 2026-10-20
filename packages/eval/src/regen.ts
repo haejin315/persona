@@ -99,11 +99,18 @@ async function llmReasons(
     .map((t) => `[turn ${t.index}] ${t.role === "user" ? scenario.persona.name : name}: ${t.content}`)
     .join("\n\n");
   const targets = windowReplies.map((t) => t.index).join(", ");
+  // Facts the user has revealed before this window (from the scenario script), so the classifier
+  // does not mistake correct recall of an earlier turn for "knows things it cannot know".
+  const userTurnsBefore = turns.slice(0, first).filter((t) => t.role === "user").length;
+  const revealed = scenario.beats.filter((b) => b.fromUserTurn <= userTurnsBefore).flatMap((b) => b.reveal);
 
   const system = `You review a ${LANG_NAME[scenario.lang]} roleplay chat log between the user "${scenario.persona.name}" and an AI playing "${name}", looking for replies a user would press "regenerate" on.
 
 CHARACTER
 ${characterSheet(card, scenario)}
+
+FACTS ${scenario.persona.name} HAS ALREADY TOLD ${name} EARLIER IN THE CONVERSATION (not shown in this excerpt; using them is correct recall, not out_of_character):
+${revealed.length ? revealed.map((r) => `- ${r}`).join("\n") : "- (nothing yet)"}
 
 For each of ${name}'s replies at turns ${targets}, list every label that applies (empty list if the reply is fine):
 - ignores_user: does not respond to what the user just said, asked or did (answers a different question, skips an action the user took)
