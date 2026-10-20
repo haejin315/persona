@@ -44,7 +44,10 @@ export function probeAnswerable(turns: Turn[], atUserTurn: number, expected: str
     .map((w) => w.replace(/(의|을|를|은|는|이|가|에서|으로|로|과|와)$/u, ""))
     .filter((w) => w.length >= 2);
   // Every content word must have been said (so "mother's ring" needs both "mother" and "ring").
-  return words.length === 0 || words.every((w) => userText.includes(w));
+  // Korean nominalisations in the expected answer ("없음", "그리기") match their verb stem in speech
+  // ("없어서", "그렸다"): found on the 200-turn run, where "4층, 엘리베이터 없음" was wrongly excluded.
+  const said = (w: string) => userText.includes(w) || (/(음|기|함|됨|임)$/u.test(w) && w.length >= 2 && userText.includes(w.slice(0, -1)));
+  return words.length === 0 || words.every(said);
 }
 
 /** Map a character turn index to the number of user turns that preceded it. */

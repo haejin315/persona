@@ -77,6 +77,7 @@ export class MemoryManager {
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
       "}",
       "Keep facts from existing memory unless contradicted. Max 25 facts; merge duplicates.",
+      `Attribute every fact to the right person and start it with their name (the user or ${name}). What the user tells ${name} about themselves is a fact about the USER, even when ${name} reacts to it.`,
     ].join("\n");
 
     const res = await this.provider.generate(
