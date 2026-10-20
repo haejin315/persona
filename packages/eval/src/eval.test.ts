@@ -30,6 +30,12 @@ describe("format checks", () => {
     const r = `*カップを置く。* 「…はい。」 안녕`;
     expect(checkFormat(r, "ja", persona).find((c) => c.id === "no_wrong_script")!.ok).toBe(false);
   });
+
+  it("flags ASCII quotes in a Japanese reply but not corner brackets", () => {
+    expect(checkFormat(`*カップを置く。* "…はい。"`, "ja", persona).find((c) => c.id === "quote_style")!.ok).toBe(false);
+    expect(checkFormat(`*カップを置く。* 「…はい。」`, "ja", persona).find((c) => c.id === "quote_style")!.ok).toBe(true);
+    expect(checkFormat(`*컵을 놓는다.* "...네."`, "ko", persona).find((c) => c.id === "quote_style")!.ok).toBe(true);
+  });
 });
 
 describe("scenarios", () => {

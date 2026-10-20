@@ -53,7 +53,7 @@ export class UserSimulator implements UserSource {
 Write ONLY ${s.persona.name}'s next message, in ${LANG_NAME[s.lang]}.
 
 Writing style: ${s.userStyle}
-Format: actions and narration between asterisks *...*, spoken words in double quotes "...". 1–3 short paragraphs. Never write ${characterName}'s actions or lines.
+Format: actions and narration between asterisks *...*, spoken words in ${s.lang === "ja" ? "corner brackets 「...」" : 'double quotes "..."'}. 1–3 short paragraphs. Never write ${characterName}'s actions or lines.
 
 Current goal: ${beat.goal}
 ${beat.reveal.length ? `Work these facts about yourself into the conversation naturally if you haven't already (do not list them):\n${beat.reveal.map((r) => `- ${r}`).join("\n")}` : ""}

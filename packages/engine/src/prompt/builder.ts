@@ -183,9 +183,9 @@ ${bullet(st.avoid)}
 
 # FORMAT
 - Actions, expressions and scene narration go between asterisks: *...*${variety ? " Each action is ONE short sentence (about 15 characters); at most three action lines per reply." : ""}
-- Spoken words go between double quotes: "..."
+- Spoken words go between ${lang === "ja" ? "corner brackets: 「...」 (never ASCII double quotes, even if the user uses them)" : 'double quotes: "..."'}
 - ${variety ? "2 to 6 short lines in total, under 350 characters on calm beats (a little more only when the scene turns). Every line must earn its place." : "1 to 4 short paragraphs."} Mix narration and speech; do not write only one of them.
-- The user's messages follow the same convention. Text between asterisks in their message is what ${persona.name} does; quoted text is what ${persona.name} says.
+- The user's messages follow the same convention${lang === "ja" ? " (they may use \"...\" for speech; you still answer with 「...」)" : ""}. Text between asterisks in their message is what ${persona.name} does; quoted text is what ${persona.name} says.
 - Never write ${persona.name}'s actions, thoughts or lines. End your turn where ${persona.name} would naturally respond.
 
 ## Examples of how ${name} talks

@@ -49,6 +49,9 @@ export function checkFormat(reply: string, lang: Lang, persona: UserPersona): Fo
     // The character must not narrate the user's actions inside its own *action* blocks.
     { id: "does_not_narrate_user", ok: !narratesUser },
     { id: "no_ai_disclaimer", ok: !/(AI|인공지능|언어 모델|language model|アシスタント|人工知能)/i.test(reply) },
+    // Japanese speech is 「...」; a reply that falls back to ASCII "..." has drifted to the user's
+    // input convention (seen on kael-ja: 36/50 replies once the simulated user typed "...").
+    { id: "quote_style", ok: lang !== "ja" || !/"[^"\n]{2,}"/.test(reply) },
   ];
 }
 
