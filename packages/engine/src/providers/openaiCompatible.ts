@@ -35,7 +35,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseURL });
   }
 
-  async generate(messages: ChatMessage[], opts: GenerateOptions = {}): Promise<GenerateResult> {
+  async generate(messagesIn: ChatMessage[], opts: GenerateOptions = {}): Promise<GenerateResult> {
+    const messages = messagesIn.map(({ role, content }) => ({ role, content }));
     const model = opts.model ?? this.defaultModel;
     const t0 = performance.now();
     const res = await this.client.chat.completions.create(
@@ -55,7 +56,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
   }
 
-  async *stream(messages: ChatMessage[], opts: GenerateOptions = {}): AsyncIterable<string> {
+  async *stream(messagesIn: ChatMessage[], opts: GenerateOptions = {}): AsyncIterable<string> {
+    const messages = messagesIn.map(({ role, content }) => ({ role, content }));
     const model = opts.model ?? this.defaultModel;
     const t0 = performance.now();
     let usage: TokenUsage | undefined;

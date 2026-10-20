@@ -134,6 +134,7 @@ function buildV2(
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 = 0,
   recentBlock = false,
+  splitContext = false,
 ): ChatMessage[] {
   {
     const st = card.style[lang]!;
@@ -167,8 +168,7 @@ ${bullet(card.world.rules)}
 
 # RELATIONSHIP & SCENE
 At the start: ${f(card.scenario.relationshipToUser)}
-Current relationship stage: ${memory.relationship.stage}
-${memory.relationship.notes.length ? bullet(memory.relationship.notes) : ""}
+${splitContext ? "(the current relationship stage and memory are given with the conversation)" : `Current relationship stage: ${memory.relationship.stage}\n${memory.relationship.notes.length ? bullet(memory.relationship.notes) : ""}`}
 Plot hooks you may pull on when the conversation stalls (don't force them):
 ${bullet(card.scenario.plotHooks.map(f))}
 
@@ -191,15 +191,19 @@ ${bullet(st.avoid)}
 ## Examples of how ${name} talks
 ${examples || "(none)"}
 
-# MEMORY (what has happened so far - treat as true)
+${
+  splitContext
+    ? ""
+    : `# MEMORY (what has happened so far - treat as true)
 ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
 ${bullet(memory.facts)}
 
-${variety ? `${VARIETY_BLOCK(name, persona.name, variety === 2)}
+`
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety === 2)}
 
 ` : ""}${
-  recentBlock
+  recentBlock && !splitContext
     ? `# RECENTLY SAID (your last replies, condensed - do NOT restate these points, offers, promises or gestures; move the scene forward instead)
 ${recentlySaid(recent, name)}
 
@@ -219,7 +223,25 @@ ${STRICT_SAFETY_BLOCK}`
 }`;
 
     // Fill once more over the whole prompt so no card field can leak a raw {{user}}.
-    return [{ role: "system", content: f(system) }, ...toMessages(recent)];
+    const messages: ChatMessage[] = [{ role: "system", content: f(system) }];
+    if (splitContext) {
+      const context = `# RELATIONSHIP STAGE
+${memory.relationship.stage}${memory.relationship.notes.length ? `\n${bullet(memory.relationship.notes)}` : ""}
+
+# MEMORY (what has happened so far)
+${memory.summary || "(the conversation has just begun)"}
+Facts to remember:
+${bullet(memory.facts)}${
+        recentBlock
+          ? `
+
+# RECENTLY SAID (your last replies, condensed - do NOT restate these points, offers, promises or gestures; move the scene forward instead)
+${recentlySaid(recent, name)}`
+          : ""
+      }`;
+      messages.push({ role: "system", kind: "context", content: f(context) });
+    }
+    return [...messages, ...toMessages(recent)];
   }
 }
 
@@ -262,11 +284,23 @@ export const v4Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 2),
 };
 
-/** v3 + an engine-built RECENTLY SAID block (last 3 replies condensed). */
+/**
+ * v3 with the per-turn state (relationship stage, memory) moved out of the system prompt into a
+ * context message. Same words, different placement: the system prompt is now byte-identical
+ * across the whole conversation, so the CLI route's prompt cache hits on every turn including
+ * the ones right after a memory consolidation.
+ */
+export const v3Cached: PromptVersion = {
+  id: "v3-cached",
+  description: "v3-structured with memory / relationship stage as a per-turn context message (static system prompt → cache hits every turn).",
+  build: (ctx) => buildV2(ctx, "card", 1, false, true),
+};
+
+/** v3-cached + an engine-built RECENTLY SAID block (last 3 replies condensed) in the context message. */
 export const v3Recent: PromptVersion = {
   id: "v3-recent",
-  description: "v3-structured + RECENTLY SAID block: the engine lists what the character just said so content is not restated.",
-  build: (ctx) => buildV2(ctx, "card", 1, true),
+  description: "v3-cached + RECENTLY SAID block: the engine lists what the character just said so content is not restated.",
+  build: (ctx) => buildV2(ctx, "card", 1, true, true),
 };
 
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
@@ -274,6 +308,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v2Structured.id]: v2Structured,
   [v3Structured.id]: v3Structured,
   [v4Structured.id]: v4Structured,
+  [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
   [v2StrictSafety.id]: v2StrictSafety,

@@ -126,6 +126,13 @@ export const emptyMemory = (): MemoryState => ({
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+  /**
+   * "context" marks instructions that change every turn (memory, relationship stage, what was
+   * just said). Providers keep them OUT of the cached static system prompt: the Claude CLI route
+   * caches the system prompt only when it is byte-identical, so one changing line there costs
+   * the whole cache (measured: v3-recent cached 0 tokens vs 3,449 for v3).
+   */
+  kind?: "context";
 }
 
 /** Replace {{user}} placeholders with the persona's name. */

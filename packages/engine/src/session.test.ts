@@ -56,7 +56,8 @@ describe("prompt versions", () => {
         expect(msgs[0]!.content).toContain(card.name[lang]!);
         expect(msgs[0]!.content).toContain("민수");
         expect(msgs[0]!.content).not.toContain("{{user}}");
-        expect(msgs).toHaveLength(2); // system + first message
+        expect(msgs.filter((m) => m.kind !== "context")).toHaveLength(2); // system + first message (+ optional context)
+        for (const m of msgs.filter((m) => m.kind === "context")) expect(m.content).not.toContain("{{user}}");
       }
     }
   });
@@ -65,6 +66,29 @@ describe("prompt versions", () => {
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v2-structured" });
     s.memory = { ...emptyMemory(), facts: ["유저의 이름은 민수다"] };
     expect(s.buildMessages()[0]!.content).toContain("유저의 이름은 민수다");
+  });
+
+  it("v3-cached keeps the system prompt identical while memory changes (context message carries it)", () => {
+    const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v3-cached" });
+    const before = s.buildMessages();
+    s.memory = { ...emptyMemory(), facts: ["유저의 이름은 민수다"], relationship: { stage: "friendly", notes: [] } };
+    const after = s.buildMessages();
+    expect(after[0]!.content).toBe(before[0]!.content); // static system prompt unchanged
+    expect(after[1]!.kind).toBe("context");
+    expect(after[1]!.content).toContain("유저의 이름은 민수다");
+    expect(after[1]!.content).toContain("friendly");
+    expect(before[0]!.content).not.toContain("Facts to remember");
+  });
+
+  it("claude-cli folding keeps context messages out of the system prompt", async () => {
+    const { foldMessages } = await import("./providers/claudeCli.js");
+    const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v3-cached", persona });
+    s.open();
+    s.memory = { ...emptyMemory(), facts: ["유저는 고양이 보리를 키운다"] };
+    const { system, prompt } = foldMessages(s.buildMessages());
+    expect(system).not.toContain("보리");
+    expect(prompt).toContain("보리");
+    expect(prompt.indexOf("[CURRENT STATE")).toBe(0);
   });
 
   it("fills {{user}} in the first message", () => {

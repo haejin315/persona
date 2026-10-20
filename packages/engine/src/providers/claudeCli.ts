@@ -98,11 +98,15 @@ export class ClaudeCliProvider implements LLMProvider {
 
 /** The CLI takes one system prompt and one user prompt; fold multi-turn history into a transcript. */
 export function foldMessages(messages: ChatMessage[]): { system: string; prompt: string } {
-  const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+  // Static instructions → --system-prompt (cached by the CLI when byte-identical across calls).
+  // Per-turn context → head of the stdin prompt, so the system prompt never changes mid-conversation.
+  const system = messages.filter((m) => m.role === "system" && m.kind !== "context").map((m) => m.content).join("\n\n");
+  const context = messages.filter((m) => m.kind === "context").map((m) => m.content).join("\n\n");
   const rest = messages.filter((m) => m.role !== "system");
-  if (rest.length === 1) return { system, prompt: rest[0]!.content };
+  const head = context ? `[CURRENT STATE - treat as true, do not quote]\n${context}\n\n` : "";
+  if (rest.length === 1) return { system, prompt: head + rest[0]!.content };
   const prompt = [
-    "The conversation so far is below. Write ONLY the next ASSISTANT message, with no label.",
+    head + "The conversation so far is below. Write ONLY the next ASSISTANT message, with no label.",
     "",
     ...rest.map((m) => `[${m.role === "assistant" ? "ASSISTANT" : "USER"}]\n${m.content}`),
   ].join("\n\n");
