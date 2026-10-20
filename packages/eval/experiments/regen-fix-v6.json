@@ -8,7 +8,7 @@
   "memoryModel": "claude-cli:haiku",
   "repeats": 1,
   "replayFrom": "eval-results/regen-fix-v4",
-  "replayArmId": "v2-structured/sonnet",
+  "replayArmId": "v4-structured/sonnet",
   "judgeModel": "claude-cli:opus",
   "outDir": "eval-results/regen-fix-v6"
 }
