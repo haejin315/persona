@@ -66,7 +66,7 @@ export interface Arm {
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in
    * context instead of a summary.
    */
-  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean };
+  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" };
 }
 
 export interface RunConfig {

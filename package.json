@@ -16,7 +16,8 @@
     "eval": "tsx packages/eval/src/cli.ts",
     "render": "tsx scripts/render-prompt.ts",
     "lint-cards": "tsx scripts/lint-cards.ts",
-    "register-stats": "tsx scripts/register-stats.ts"
+    "register-stats": "tsx scripts/register-stats.ts",
+    "memory-replay": "tsx scripts/memory-replay.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

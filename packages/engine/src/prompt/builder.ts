@@ -92,7 +92,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
   v8
@@ -117,7 +117,12 @@ ${
 - Show that you listened: when something ${user} told you earlier fits the moment (a name, a plan, a worry, a small detail from MEMORY or the conversation), use it - once per reply, in passing, the way a person who remembers would, never as a list or a quiz.${
         v9
           ? `
-- MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.`
+- MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.${
+              v10
+                ? `
+- ${user} is the authority on the present moment: what day it is, what they are holding, what they just did, how they feel. If that clashes with something you said or worked out earlier, ${user} is right and you move on without correcting them - MEMORY records what was said, not the calendar.`
+                : ""
+            }`
           : ""
       }`
     : ""
@@ -169,7 +174,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -239,7 +244,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -402,6 +407,18 @@ export const v9Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 7),
 };
 
+/**
+ * v10: v9 plus a scope on the MEMORY rule. In both 200-turn v9 repeats (docs/02) the scripted user said
+ * "today is Tuesday" and 하루 corrected him to Wednesday four times over 40 turns ("자꾸 하루 늦게
+ * 사시네요"), because her own earlier correction had been stored as a fact and v9 told her MEMORY wins.
+ * MEMORY is authoritative for what was said; the user is authoritative for the present moment.
+ */
+export const v10Structured: PromptVersion = {
+  id: "v10-structured",
+  description: "v9 + the user is the authority on the present moment (what day it is, what they are doing, how they feel); MEMORY records what was said, not the calendar.",
+  build: (ctx) => buildV2(ctx, "card", 8),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -412,6 +429,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v7Structured.id]: v7Structured,
   [v8Structured.id]: v8Structured,
   [v9Structured.id]: v9Structured,
+  [v10Structured.id]: v10Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,

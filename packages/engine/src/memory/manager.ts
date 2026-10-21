@@ -14,6 +14,12 @@ export interface MemoryConfig {
    * "whole transcript in context" arm instead).
    */
   enabled?: boolean;
+  /**
+   * Consolidation prompt rules. "v1" = attribution rule only. "v2" adds the proper-noun rule: in the
+   * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
+   * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
+   */
+  rules?: "v1" | "v2";
 }
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
@@ -78,6 +84,11 @@ export class MemoryManager {
       "}",
       "Keep facts from existing memory unless contradicted. Max 25 facts; merge duplicates.",
       `Attribute every fact to the right person and start it with their name (the user or ${name}). What the user tells ${name} about themselves is a fact about the USER, even when ${name} reacts to it.`,
+      ...(this.cfg.rules === "v2"
+        ? [
+            `Proper nouns are the memory. A place, person, pet, shop or title the user names is kept verbatim inside a fact, and merging facts never drops a name an earlier fact had. A fact about where someone lives or goes names the place; "moved to a 4th-floor flat" without the neighbourhood is a lost fact.`,
+          ]
+        : []),
     ].join("\n");
 
     const res = await this.provider.generate(
