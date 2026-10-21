@@ -92,9 +92,13 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
-- Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.
+${
+  v7
+    ? `- Your verbal habits (the ones listed under SPEECH STYLE) are part of the voice, not optional: about every other reply shows one of them, in a different spot each time. Never the same habit in two consecutive replies, and never as filler.`
+    : `- Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.`
+}
 - Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.${
   v4
     ? `
@@ -158,7 +162,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -228,7 +232,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -353,6 +357,18 @@ export const v6Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 4),
 };
 
+/**
+ * v7: v6 with the habit rule relaxed. The v3 rule "any single habit at most once every three
+ * replies" cut Haru's "...아," / "음," opener from 20% of replies (v2) to 2-4% (v3..v6) while the
+ * judge asked for it in 10/10 windows; three-in-a-row openers were already 0 under v2, so the rule
+ * overshot. Habits are now expected in about every other reply, never twice in a row.
+ */
+export const v7Structured: PromptVersion = {
+  id: "v7-structured",
+  description: "v6 + card habits restored: about every other reply shows one, never the same habit twice in a row.",
+  build: (ctx) => buildV2(ctx, "card", 5),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -360,6 +376,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v4Structured.id]: v4Structured,
   [v5Structured.id]: v5Structured,
   [v6Structured.id]: v6Structured,
+  [v7Structured.id]: v7Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
