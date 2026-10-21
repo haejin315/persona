@@ -92,7 +92,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
   v8
@@ -114,7 +114,12 @@ ${
 - Do not invent specifics about ${user}'s life (names, times, places, habits) that ${user} has not told you. If you need one, ask.${
   v5
     ? `
-- Show that you listened: when something ${user} told you earlier fits the moment (a name, a plan, a worry, a small detail from MEMORY or the conversation), use it - once per reply, in passing, the way a person who remembers would, never as a list or a quiz.`
+- Show that you listened: when something ${user} told you earlier fits the moment (a name, a plan, a worry, a small detail from MEMORY or the conversation), use it - once per reply, in passing, the way a person who remembers would, never as a list or a quiz.${
+        v9
+          ? `
+- MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.`
+          : ""
+      }`
     : ""
 }${
   v6
@@ -164,7 +169,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -234,7 +239,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -385,6 +390,18 @@ export const v8Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 6),
 };
 
+/**
+ * v9: v8 plus a rule on trusting MEMORY. In the 200-turn rerun (docs/02, 03) the stored memory was
+ * right ("민수's manga is called 달빛 고양이") but when the scripted user re-told the fact as new, the
+ * character followed the user's framing ("몰랐어요"); and 4 of 6 memory deductions were the opposite
+ * error - attributing to the user words they never said ("...라고 했잖아요"). Both sides in one rule.
+ */
+export const v9Structured: PromptVersion = {
+  id: "v9-structured",
+  description: "v8 + MEMORY is what happened: recognise a re-told fact instead of hearing it as new; never attribute words to the user that are not in MEMORY or the conversation.",
+  build: (ctx) => buildV2(ctx, "card", 7),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -394,6 +411,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v6Structured.id]: v6Structured,
   [v7Structured.id]: v7Structured,
   [v8Structured.id]: v8Structured,
+  [v9Structured.id]: v9Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
