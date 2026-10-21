@@ -61,7 +61,13 @@ function userTurnsBefore(turns: Turn[], turnIndex: number): number {
  * 반에 깨워요") and a judge that only sees the script marks the character's correct recall of
  * them as "invented". Found on the first real run, where every memory arm lost points for it.
  */
-export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 6000): string {
+/**
+ * Everything the user has said so far, speech only. The cap used to be 6,000 chars, which a 200-turn
+ * run exceeds around turn 120; the judge then saw only the recent part and marked a detail the user
+ * gave at turn 59 as "invented" at turn 400 (docs/02). 200 user turns are ~20k chars, so the cap is
+ * now well above that and exists only as a safety net.
+ */
+export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 60000): string {
   const lines = turns
     .filter((t) => t.role === "user" && t.index < beforeIndex)
     .map((t) => `[turn ${t.index}] ${t.content.replace(/\*[^*]*\*/g, "").replace(/\s+/g, " ").trim()}`)
