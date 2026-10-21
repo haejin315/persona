@@ -14,7 +14,8 @@
     "test": "vitest run",
     "econ": "tsx scripts/unit-economics.ts",
     "eval": "tsx packages/eval/src/cli.ts",
-    "render": "tsx scripts/render-prompt.ts"
+    "render": "tsx scripts/render-prompt.ts",
+    "lint-cards": "tsx scripts/lint-cards.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
