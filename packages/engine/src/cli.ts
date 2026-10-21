@@ -40,7 +40,7 @@ async function main() {
     console.log("Available characters:");
     for (const c of loadAllCharacters()) console.log(`  ${c.id}  (${c.genre})  ${c.name.ko}`);
     console.log(
-      '\nUsage: npm run chat -- --character <id> [--lang ko|ja] [--model claude-cli[:sonnet|haiku|opus]|openai[:model]|ollama[:model]] [--prompt v1-flat|v2-structured|v3-structured] [--persona "이름: 설명"]',
+      '\nUsage: npm run chat -- --character <id> [--lang ko|ja] [--model claude-cli[:sonnet|haiku|opus]|openai[:model]|ollama[:model]] [--prompt v1-flat|v2-structured|v3-structured|v4-structured|v5-structured|v6-structured] [--persona "이름: 설명"]',
     );
     return;
   }
