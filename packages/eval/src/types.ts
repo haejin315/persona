@@ -116,6 +116,12 @@ export interface ConversationRecord {
   persona: UserPersona;
   turns: Turn[];
   memory: MemoryState;
+  /**
+   * Memory state after each consolidation, keyed by the last turn index it covers. Lets the judge see
+   * what the character actually knew at a checkpoint instead of the whole user transcript (which a
+   * 200-turn run overflows). Absent on records made before 2026-10-21.
+   */
+  memorySnapshots?: { afterTurnIndex: number; memory: MemoryState }[];
   /** Character-side usage summed over the conversation. */
   usage: TokenUsage & { calls: number };
   /** Simulated-user and memory-consolidation usage, so the whole run can be priced. */

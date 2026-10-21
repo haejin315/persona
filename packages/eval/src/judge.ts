@@ -1,4 +1,4 @@
-import { findCharacter, type CharacterCard, type Lang, type LLMProvider, type Turn } from "@persona/engine";
+import { findCharacter, type CharacterCard, type Lang, type LLMProvider, type MemoryState, type Turn } from "@persona/engine";
 import { checkFormat, formatScore } from "./format.js";
 import { findScenario } from "./scenarios.js";
 import { METRICS, type CheckpointScore, type ConversationRecord, type Metric, type ProbeResult, type Scenario, type ScoreRecord } from "./types.js";
@@ -78,7 +78,23 @@ export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 60
   return out || "(nothing yet)";
 }
 
-function rubric(card: CharacterCard, scenario: Scenario, revealed: string[], userSaid: string): string {
+/** The character's own memory state at a checkpoint (latest consolidation before the window), when the record has snapshots. */
+export function memoryAt(rec: ConversationRecord, beforeIndex: number): MemoryState | undefined {
+  const snaps = rec.memorySnapshots?.filter((s) => s.afterTurnIndex < beforeIndex);
+  return snaps?.length ? snaps[snaps.length - 1]!.memory : undefined;
+}
+
+function memoryBlock(m: MemoryState | undefined): string {
+  if (!m) return "";
+  const facts = m.facts.length ? m.facts.map((f) => `- ${f}`).join("\n") : "- (none yet)";
+  return `
+WHAT THE CHARACTER'S OWN MEMORY HOLDS AT THIS POINT (the summary and facts the engine gave the character; relationship stage: ${m.relationship.stage}). Using these is correct memory; contradicting them is a memory slip; a detail that is here but phrased as new to the character is a slip:
+${m.summary || "(no summary yet)"}
+${facts}
+`;
+}
+
+function rubric(card: CharacterCard, scenario: Scenario, revealed: string[], userSaid: string, memory?: MemoryState): string {
   const st = card.style[scenario.lang]!;
   const name = card.name[scenario.lang] ?? card.id;
   return `You are grading replies written by an AI playing the character "${name}" in a ${LANG_NAME[scenario.lang]} roleplay with the user "${scenario.persona.name}".
@@ -103,7 +119,7 @@ ${revealed.length ? revealed.map((r) => `- ${r}`).join("\n") : "- (nothing yet)"
 
 WHAT THE USER ACTUALLY SAID BEFORE THIS WINDOW (verbatim, speech only). Anything the character recalls from here is correct memory, not invention:
 ${userSaid}
-
+${memoryBlock(memory)}
 Score each dimension 1–5 (5 = flawless, 3 = noticeable slips, 1 = broken):
 - consistency: identity, backstory, world rules and hard constraints respected; no out-of-character knowledge or abilities; does not narrate the user.
 - memory: uses or at least does not contradict the shared facts and earlier events visible in the transcript; no "re-introductions" of things already known.
@@ -153,7 +169,7 @@ export async function judgeConversation(rec: ConversationRecord, opts: JudgeOpti
     const prior = opts.reuse?.checkpoints.find((c) => c.turnIndex === endTurn.index);
     const parsed = prior
       ? { consistency: { score: prior.consistency, note: prior.notes.consistency }, memory: { score: prior.memory, note: prior.notes.memory }, style: { score: prior.style, note: prior.notes.style } }
-      : await askJson(opts.provider, opts.model, rubric(card, scenario, revealed, userSaidBefore(rec.turns, firstIdx)), `TRANSCRIPT WINDOW (grade ${name}'s replies only):\n\n${transcript}`);
+      : await askJson(opts.provider, opts.model, rubric(card, scenario, revealed, userSaidBefore(rec.turns, firstIdx), memoryAt(rec, firstIdx)), `TRANSCRIPT WINDOW (grade ${name}'s replies only):\n\n${transcript}`);
 
     const fmt = windowReplies.map((t) => formatScore(checkFormat(t.content, scenario.lang, scenario.persona)));
     const fmtMean = fmt.reduce((a, b) => a + b, 0) / fmt.length;

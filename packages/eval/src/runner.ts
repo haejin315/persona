@@ -131,6 +131,8 @@ export async function runConversation(
   const simUsage = emptyTotals();
   let truncated = false;
   let charModel = chat.model ?? chat.provider.defaultModel;
+  const memorySnapshots: ConversationRecord["memorySnapshots"] = [];
+  let consolidations = 0;
 
   for (let userTurn = 1; userTurn <= totalTurns; userTurn++) {
     userTurnNow = userTurn;
@@ -141,6 +143,10 @@ export async function runConversation(
       if (reply.meta?.usage) {
         addUsage(usage as UsageTotals, reply.meta.usage);
         charModel = reply.meta.model ?? charModel;
+      }
+      if (session.memoryUsage.calls > consolidations) {
+        consolidations = session.memoryUsage.calls;
+        memorySnapshots.push({ afterTurnIndex: session.turns.length - 1, memory: structuredClone(session.memory) });
       }
     } catch (e) {
       if (e instanceof BudgetExceededError) {
@@ -166,6 +172,7 @@ export async function runConversation(
     persona: scenario.persona,
     turns: session.turns,
     memory: session.memory,
+    memorySnapshots,
     usage,
     simUsage,
     memoryUsage,
