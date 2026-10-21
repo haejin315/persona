@@ -92,7 +92,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 - Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.
 - Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.${
@@ -110,10 +110,31 @@ const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false) => `
     ? `
 - Show that you listened: when something ${user} told you earlier fits the moment (a name, a plan, a worry, a small detail from MEMORY or the conversation), use it - once per reply, in passing, the way a person who remembers would, never as a list or a quiz.`
     : ""
+}${
+  v6
+    ? `
+- End on an observation or a small action more often than on a question: at most one question per reply, and never a question as the last line two replies in a row.
+- Feelings are shown by what ${name} does, not named: no "다행이에요" / "어색해요" / "よかった" about yourself, and never a sentence that tells ${user} what they feel.`
+    : ""
 }
 - The examples above show the voice, not a template: do not copy their gestures or sentence shapes.`;
 
-/** 0 = v2, 1 = v3 (VARIETY block), 2 = v4 (+ no echo openers, varied sign-offs, answer everything first). */
+/**
+ * v6: the judge's residual style notes after the 15-char card conflict was removed (docs/09) were
+ * sentence endings sliding into plain form ("...넣은 거니까.", "...정할 일이고.") in a polite character,
+ * plus replies ending on questions. Both are register, not vocabulary, so they get their own block.
+ */
+const REGISTER_BLOCK = (name: string, lang: Lang) => `# REGISTER (how every sentence ends)
+- Every sentence ${name} speaks ends at the politeness level in SPEECH STYLE - including trailing half-sentences and afterthoughts.${
+  lang === "ko"
+    ? ` In polite speech a sentence never ends in "~고.", "~니까.", "~다." or "~다니."; finish it as "~고요.", "~니까요.", "~네요." or "~거든요.". A casual (반말) character does not slide into "~요" either.`
+    : lang === "ja"
+      ? ` In です・ます speech do not drop to plain form ("~だ。", "~から。") for emphasis; a casual character does not drift into です・ます either.`
+      : ""
+}
+- The level shifts only when the relationship stage says so, and then one sentence at a time, never a whole reply at once.`;
+
+/** 0 = v2, 1 = v3 (VARIETY block), 2 = v4 (+ no echo openers, varied sign-offs, answer everything first), 3 = v5 (+ one remembered detail), 4 = v6 (+ register & endings). */
 /**
  * Engine-side anti-repetition: the speech lines of the character's last few replies, so the model
  * is told explicitly what it has just said instead of being asked to notice it in the transcript.
@@ -137,7 +158,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -185,9 +206,11 @@ Verbal habits:
 ${bullet(st.quirks)}
 Do NOT:
 ${bullet(st.avoid)}
-
+${variety >= 4 ? `
+${REGISTER_BLOCK(name, lang)}
+` : ""}
 # FORMAT
-- Actions, expressions and scene narration go between asterisks: *...*${variety ? " Each action is ONE short sentence (about 15 characters); at most three action lines per reply." : ""}
+- Actions, expressions and scene narration go between asterisks: *...*${variety >= 4 ? " Each action is ONE short sentence, the length of the examples below; at most three action lines per reply." : variety ? " Each action is ONE short sentence (about 15 characters); at most three action lines per reply." : ""}
 - Spoken words go between ${lang === "ja" ? "corner brackets: 「...」 (never ASCII double quotes, even if the user uses them)" : 'double quotes: "..."'}
 - ${variety ? "2 to 6 short lines in total, under 350 characters on calm beats (a little more only when the scene turns). Every line must earn its place." : "1 to 4 short paragraphs."} Mix narration and speech; do not write only one of them.
 - The user's messages follow the same convention${lang === "ja" ? " (they may use \"...\" for speech; you still answer with 「...」)" : ""}. Text between asterisks in their message is what ${persona.name} does; quoted text is what ${persona.name} says.
@@ -205,7 +228,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety === 3)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -319,12 +342,24 @@ export const v5Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 3),
 };
 
+/**
+ * v6: v5 plus a REGISTER block (sentence endings stay at the card's politeness level, including
+ * trailing half-sentences), at most one question per reply, feelings shown rather than named, and
+ * the FORMAT action length deferred to the card's examples instead of a hard-coded number.
+ */
+export const v6Structured: PromptVersion = {
+  id: "v6-structured",
+  description: "v5 + REGISTER block (endings stay at the card's politeness level), ≤1 question per reply, no named feelings, action length from the card's examples.",
+  build: (ctx) => buildV2(ctx, "card", 4),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
   [v3Structured.id]: v3Structured,
   [v4Structured.id]: v4Structured,
   [v5Structured.id]: v5Structured,
+  [v6Structured.id]: v6Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
