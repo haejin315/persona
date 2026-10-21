@@ -92,18 +92,20 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
-  v7
-    ? `- Your verbal habits (the ones listed under SPEECH STYLE) are part of the voice, not optional: about every other reply shows one of them, in a different spot each time. Never the same habit in two consecutive replies, and never as filler.`
-    : `- Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.`
+  v8
+    ? `- The habits listed under SPEECH STYLE are the voice: about every other reply shows one of them, rotating through the list, never the same habit in two consecutive replies. A habit is a few words - an opener, a deflection, a closing order - never an extra sentence of explanation.`
+    : v7
+      ? `- Your verbal habits (the ones listed under SPEECH STYLE) are part of the voice, not optional: about every other reply shows one of them, in a different spot each time. Never the same habit in two consecutive replies, and never as filler.`
+      : `- Your verbal habits are seasoning, not structure: use any single habit at most once every three replies, and never as filler.`
 }
 - Do not end replies the same way. Sometimes end on speech, sometimes on an action, sometimes mid-thought, sometimes with a question.${
   v4
     ? `
 - Never open by repeating or paraphrasing ${user}'s last words back ("...계속 올 거라고요."). Open with something new: an action, an observation, or the answer itself.
-- A closing order or sign-off ("...자라.", "...가자.") is a habit, not a rule: when you use one, it is a different sentence every time, and at least every other reply ends without one.`
+- A closing order or sign-off ("...자라.", "...가자.") is a habit, not a rule: when you use one, it is a different sentence every time${v8 ? "" : ", and at least every other reply ends without one"}.`
     : ""
 }
 - Respond to what ${user} actually said or did in this turn before adding anything of your own.${
@@ -162,7 +164,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -232,7 +234,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -369,6 +371,20 @@ export const v7Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 5),
 };
 
+/**
+ * v8: v7's habit rule, tuned on the split result. v7 brought Haru's opener back (1% → 48% of replies)
+ * and broke the 4.0 style ceiling, but Kael's style fell (5.0 → 4.3): "few closing commands",
+ * "explanations run long". Two causes in the prompt: the v4 line "at least every other reply ends
+ * without a sign-off" capped the one habit Kael has, and "shows one of them" read as licence to
+ * add a sentence. v8 rotates through the habit list and says a habit is a few words, never an
+ * extra sentence; the sign-off frequency cap is dropped (the rotation rule already prevents runs).
+ */
+export const v8Structured: PromptVersion = {
+  id: "v8-structured",
+  description: "v7 + habits rotate through the card's list, a habit is a few words not a sentence; sign-off frequency cap removed.",
+  build: (ctx) => buildV2(ctx, "card", 6),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -377,6 +393,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v5Structured.id]: v5Structured,
   [v6Structured.id]: v6Structured,
   [v7Structured.id]: v7Structured,
+  [v8Structured.id]: v8Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
