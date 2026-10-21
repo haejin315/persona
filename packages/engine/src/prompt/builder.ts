@@ -92,7 +92,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
   v8
@@ -118,10 +118,13 @@ ${
         v9
           ? `
 - MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.${
-              v10
+              v11
                 ? `
+- The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices, the rules of this world, and words ${user} says you said all stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it.`
+                : v10
+                  ? `
 - ${user} is the authority on the present moment: what day it is, what they are holding, what they just did, how they feel. If that clashes with something you said or worked out earlier, ${user} is right and you move on without correcting them - MEMORY records what was said, not the calendar.`
-                : ""
+                  : ""
             }`
           : ""
       }`
@@ -174,7 +177,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -244,7 +247,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -419,6 +422,19 @@ export const v10Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 8),
 };
 
+/**
+ * v11: v10's scope drawn tighter. In the 50-turn v10 run Kael accepted the user's "three days to
+ * Halfmoon" (two in the story) and quotes he never said, because "the user is the authority on the
+ * present" bled into everything the user asserts. v11 keeps the user's authority for the here and
+ * now only, and names what stays with MEMORY: past agreements, distances, prices, world rules, and
+ * words put in the character's mouth - held once, plainly, without the running joke v9 produced.
+ */
+export const v11Structured: PromptVersion = {
+  id: "v11-structured",
+  description: "v9 + the here-and-now belongs to the user (day/time, what they do or feel now) while past agreements, world facts and attributed quotes stay with MEMORY, held once without a running joke.",
+  build: (ctx) => buildV2(ctx, "card", 9),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -430,6 +446,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v8Structured.id]: v8Structured,
   [v9Structured.id]: v9Structured,
   [v10Structured.id]: v10Structured,
+  [v11Structured.id]: v11Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,

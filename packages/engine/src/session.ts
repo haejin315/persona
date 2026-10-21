@@ -26,7 +26,10 @@ export interface SessionOptions {
   model?: string;
   temperature?: number;
   persona?: UserPersona;
-  /** Engine-side reply filters (filters.ts). Off by default; the eval turns them on per arm. */
+  /**
+   * Engine-side reply filters (filters.ts). The repeated-opener filter is on by default since
+   * 2026-10-22 (it only acts on characters whose card lists `openers`); an eval arm can turn it off.
+   */
   filters?: { repeatedOpener?: boolean };
 }
 
@@ -69,7 +72,7 @@ export class ChatSession {
     this.model = opts.model;
     this.temperature = opts.temperature;
     this.persona = opts.persona ?? DEFAULT_PERSONA;
-    this.filters = opts.filters ?? {};
+    this.filters = { repeatedOpener: true, ...(opts.filters ?? {}) };
     this.memoryManager = new MemoryManager(opts.memoryProvider ?? opts.provider, {
       ...DEFAULT_MEMORY_CONFIG,
       ...opts.memory,
