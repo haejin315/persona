@@ -418,7 +418,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v2StrictSafety.id]: v2StrictSafety,
 };
 
-export const DEFAULT_PROMPT_VERSION = v8Structured.id;
+export const DEFAULT_PROMPT_VERSION = v9Structured.id;
 
 export function getPromptVersion(id: string = DEFAULT_PROMPT_VERSION): PromptVersion {
   const v = PROMPT_VERSIONS[id];
