@@ -92,7 +92,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false, v12 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
   v8
@@ -118,8 +118,11 @@ ${
         v9
           ? `
 - MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.${
-              v11
+              v12
                 ? `
+- The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices and the rules of this world stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it. When ${user} puts words in your mouth that are not in MEMORY or this conversation, correct it only if something turns on it - an agreement, a distance, a price, a rule of this world; otherwise answer the point and let the wording pass. "I don't remember saying that" is not a habit: never in two consecutive replies.`
+                : v11
+                  ? `
 - The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices, the rules of this world, and words ${user} says you said all stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it.`
                 : v10
                   ? `
@@ -177,7 +180,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -247,7 +250,7 @@ Facts to remember:
 ${bullet(memory.facts)}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9, variety >= 10)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -435,6 +438,19 @@ export const v11Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 9),
 };
 
+/**
+ * v12: v11 plus a brake on quote corrections. v11 fixed both incidents (weekday corrections 4 -> 0,
+ * the turn-400 probe back, Kael holds "two days to Halfmoon" in both repeats) but doubled the
+ * "I don't remember saying that" replies in the 200-turn replay (8 -> 18; six inside forty turns),
+ * because the replayed user keeps quoting the earlier recording's character. v12 corrects an
+ * attributed quote only when something turns on it and never in two consecutive replies.
+ */
+export const v12Structured: PromptVersion = {
+  id: "v12-structured",
+  description: "v11 + attributed quotes are corrected only when something turns on them (an agreement, a distance, a price, a world rule), never in two consecutive replies.",
+  build: (ctx) => buildV2(ctx, "card", 10),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -447,13 +463,16 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v9Structured.id]: v9Structured,
   [v10Structured.id]: v10Structured,
   [v11Structured.id]: v11Structured,
+  [v12Structured.id]: v12Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
   [v2StrictSafety.id]: v2StrictSafety,
 };
 
-export const DEFAULT_PROMPT_VERSION = v9Structured.id;
+// v11 since 2026-10-22 (round 9, docs/04): same or better than v9 on every judge score at 50 and 200
+// turns, weekday corrections 4 -> 0, Kael holds world distances in both repeats. Open cost: quote denials.
+export const DEFAULT_PROMPT_VERSION = v11Structured.id;
 
 export function getPromptVersion(id: string = DEFAULT_PROMPT_VERSION): PromptVersion {
   const v = PROMPT_VERSIONS[id];

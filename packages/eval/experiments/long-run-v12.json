@@ -1,0 +1,19 @@
+{
+  "scenarioIds": [
+    "haru-ko-long"
+  ],
+  "arms": [
+    {
+      "id": "v12-structured/sonnet",
+      "promptVersion": "v12-structured",
+      "model": "claude-cli:sonnet"
+    }
+  ],
+  "userTurns": 200,
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "replayFrom": "eval-results/long-run",
+  "replayArmId": "v3-structured/sonnet",
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/long-run-v12"
+}
