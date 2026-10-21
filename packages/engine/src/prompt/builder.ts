@@ -485,9 +485,10 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v2StrictSafety.id]: v2StrictSafety,
 };
 
-// v11 since 2026-10-22 (round 9, docs/04): same or better than v9 on every judge score at 50 and 200
-// turns, weekday corrections 4 -> 0, Kael holds world distances in both repeats. Open cost: quote denials.
-export const DEFAULT_PROMPT_VERSION = v11Structured.id;
+// v13 since 2026-10-22 (round 11, docs/04): keeps everything v11 kept (weekday corrections 0, the
+// turn-400 probe, Kael's contract scope) and drops the quote-denial habit v11 had (200-turn replay
+// 18 -> 2); 200-turn memory 4.20 -> 4.65, recall 7/7. v12 was held back for losing the turn-400 probe.
+export const DEFAULT_PROMPT_VERSION = v13Structured.id;
 
 export function getPromptVersion(id: string = DEFAULT_PROMPT_VERSION): PromptVersion {
   const v = PROMPT_VERSIONS[id];
