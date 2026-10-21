@@ -108,6 +108,7 @@ export async function runConversation(
     temperature: arm.temperature,
     persona: scenario.persona,
     memory: { model: mem.model, ...(arm.memory ?? {}) },
+    filters: arm.filters,
   });
 
   let user: UserSource;

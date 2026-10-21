@@ -1,3 +1,4 @@
+import { firstSpeechComplete, stripRepeatedOpener } from "./filters.js";
 import { DEFAULT_MEMORY_CONFIG, MemoryManager, type MemoryConfig } from "./memory/manager.js";
 import { getPromptVersion, type PromptVersion } from "./prompt/builder.js";
 import type { GenerateOptions, LLMProvider } from "./providers/types.js";
@@ -25,6 +26,8 @@ export interface SessionOptions {
   model?: string;
   temperature?: number;
   persona?: UserPersona;
+  /** Engine-side reply filters (filters.ts). Off by default; the eval turns them on per arm. */
+  filters?: { repeatedOpener?: boolean };
 }
 
 export interface SessionSnapshot {
@@ -56,6 +59,7 @@ export class ChatSession {
   private memoryManager: MemoryManager;
   private model?: string;
   private temperature?: number;
+  private filters: { repeatedOpener?: boolean };
 
   constructor(opts: SessionOptions) {
     this.card = opts.card;
@@ -65,6 +69,7 @@ export class ChatSession {
     this.model = opts.model;
     this.temperature = opts.temperature;
     this.persona = opts.persona ?? DEFAULT_PERSONA;
+    this.filters = opts.filters ?? {};
     this.memoryManager = new MemoryManager(opts.memoryProvider ?? opts.provider, {
       ...DEFAULT_MEMORY_CONFIG,
       ...opts.memory,
@@ -149,18 +154,47 @@ export class ChatSession {
       temperature: this.temperature,
       ...opts,
     });
-    return this.push("character", res.text.trim(), {
+    const filtered = this.applyFilters(res.text.trim());
+    return this.push("character", filtered.text, {
       model: res.model,
       promptVersion: this.promptVersion.id,
       latencyMs: res.latencyMs,
       usage: res.usage,
+      ...(filtered.applied.length ? { filters: filtered.applied } : {}),
     });
+  }
+
+  /** Card openers for the session language (used by the repeated-opener filter). */
+  private openers(): string[] {
+    return this.filters.repeatedOpener ? (this.card.style[this.lang]?.openers ?? []) : [];
+  }
+
+  /** Run the enabled reply filters against the previous character reply. */
+  private applyFilters(text: string): { text: string; applied: string[] } {
+    const applied: string[] = [];
+    const openers = this.openers();
+    if (openers.length) {
+      const prev = [...this.turns].reverse().find((t) => t.role === "character")?.content;
+      const r = stripRepeatedOpener(text, prev, openers);
+      if (r.stripped) applied.push("repeated-opener");
+      text = r.text;
+    }
+    return { text, applied };
   }
 
   private async *generateStream(opts: GenerateOptions): AsyncGenerator<string, Turn> {
     await this.maybeConsolidate();
     let done: Parameters<NonNullable<GenerateOptions["onDone"]>>[0] | undefined;
-    let full = "";
+    // With a filter on, the prefix up to the end of the first spoken line is held back so the
+    // filter can edit it before the user sees it; the rest streams through untouched.
+    let held: string | undefined = this.openers().length ? "" : undefined;
+    let out = "";
+    const applied: string[] = [];
+    const release = (prefix: string): string => {
+      const r = this.applyFilters(prefix);
+      applied.push(...r.applied);
+      return r.text;
+    };
     for await (const delta of this.provider.stream(this.buildMessages(), {
       model: this.model,
       temperature: this.temperature,
@@ -170,14 +204,30 @@ export class ChatSession {
         opts.onDone?.(r);
       },
     })) {
-      full += delta;
-      yield delta;
+      if (held === undefined) {
+        out += delta;
+        yield delta;
+        continue;
+      }
+      held += delta;
+      if (firstSpeechComplete(held) || held.length > 400) {
+        const prefix = release(held);
+        held = undefined;
+        out += prefix;
+        yield prefix;
+      }
     }
-    return this.push("character", full.trim(), {
+    if (held !== undefined) {
+      const prefix = release(held);
+      out += prefix;
+      yield prefix;
+    }
+    return this.push("character", out.trim(), {
       model: done?.model ?? this.model ?? this.provider.defaultModel,
       promptVersion: this.promptVersion.id,
       latencyMs: done?.latencyMs,
       usage: done?.usage,
+      ...(applied.length ? { filters: applied } : {}),
     });
   }
 

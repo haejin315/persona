@@ -19,6 +19,11 @@ export const SpeechStyle = z.object({
   selfReference: z.string(),
   /** Signature phrases, verbal tics, punctuation habits. */
   quirks: z.array(z.string()).default([]),
+  /**
+   * Literal opener beats this character uses ("...아,", "음,"), so the engine can tell when two
+   * consecutive replies open the same way and drop the second one (filters.ts). Optional.
+   */
+  openers: z.array(z.string()).default([]),
   /** Things this character would never say in this language (tone guardrails). */
   avoid: z.array(z.string()).default([]),
   /** Few-shot example exchanges, written in the *action* "speech" format. */
@@ -100,7 +105,7 @@ export interface Turn {
   index: number;
   ts: number;
   /** Model and prompt version that produced a character turn (for eval attribution). */
-  meta?: { model?: string; promptVersion?: string; latencyMs?: number; usage?: TokenUsage };
+  meta?: { model?: string; promptVersion?: string; latencyMs?: number; usage?: TokenUsage; filters?: string[] };
 }
 
 /** Long-term memory distilled from the conversation. */

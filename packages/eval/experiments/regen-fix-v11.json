@@ -1,8 +1,33 @@
 {
-  "scenarioIds": ["haru-ko", "kael-ko"],
+  "scenarioIds": [
+    "haru-ko",
+    "kael-ko"
+  ],
   "arms": [
-    { "id": "v9-structured/sonnet", "promptVersion": "v9-structured", "model": "claude-cli:sonnet" },
-    { "id": "v10-structured/sonnet", "promptVersion": "v10-structured", "model": "claude-cli:sonnet", "memory": { "rules": "v2" } }
+    {
+      "id": "v9-structured/sonnet",
+      "promptVersion": "v9-structured",
+      "model": "claude-cli:sonnet"
+    },
+    {
+      "id": "v10-structured/sonnet",
+      "promptVersion": "v10-structured",
+      "model": "claude-cli:sonnet",
+      "memory": {
+        "rules": "v2"
+      }
+    },
+    {
+      "id": "v10-filter/sonnet",
+      "promptVersion": "v10-structured",
+      "model": "claude-cli:sonnet",
+      "memory": {
+        "rules": "v2"
+      },
+      "filters": {
+        "repeatedOpener": true
+      }
+    }
   ],
   "userTurns": 50,
   "memoryModel": "claude-cli:haiku",

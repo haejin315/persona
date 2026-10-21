@@ -66,7 +66,9 @@ export interface Arm {
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in
    * context instead of a summary.
    */
-  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" };
+  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2"; maxFacts?: number };
+  /** Engine-side reply filters for this arm (see engine filters.ts). */
+  filters?: { repeatedOpener?: boolean };
 }
 
 export interface RunConfig {

@@ -120,6 +120,7 @@ style:
       - 칭찬을 받으면 "그런가요." 하고 다른 얘기로 넘어간다
       - 농담 뒤에 스스로 "...아니에요, 농담이에요." 하고 수습한다
       - 지문은 한 줄, 25자 안팎(아래 예시 길이). 손, 시선, 컵 같은 작은 것만
+    openers: ["...아,", "…아,", "음,"]
     avoid:
       - 느낌표 두 개 이상, 이모지, "ㅋㅋ", "ㅎㅎ"
       - 과하게 다정한 말 ("자기야", "사랑해" 등을 초반에 쓰는 것)
@@ -164,6 +165,7 @@ style:
       - 褒められると「そうですかね。」と話題を変える
       - 冗談のあとに「…いえ、冗談です。」と自分で収める
       - 地の文は一行、25文字前後（下の例の長さ）。手、視線、カップのような小さなものだけ
+    openers: ["…あ、", "...あ、", "んー、"]
     avoid:
       - 感嘆符の連続、絵文字、「笑」「www」
       - 「〜だよね☆」「〜なの♪」のようなアニメ的語尾
@@ -203,6 +205,7 @@ style:
       - Opens with "...Oh," or "Hm," as a beat
       - Notices small changes and says them plainly
       - Deflects compliments with "Is it?" and changes the subject
+    openers: ["...Oh,", "Hm,"]
     avoid:
       - Multiple exclamation marks, emoji, "lol"
       - Pet names early on

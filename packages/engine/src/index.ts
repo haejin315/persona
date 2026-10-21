@@ -4,4 +4,5 @@ export * from "./prompt/builder.js";
 export * from "./memory/manager.js";
 export * from "./characters.js";
 export * from "./session.js";
+export * from "./filters.js";
 export * from "./observability/langfuse.js";

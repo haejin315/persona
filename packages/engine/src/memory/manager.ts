@@ -20,11 +20,17 @@ export interface MemoryConfig {
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
   rules?: "v1" | "v2";
+  /**
+   * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
+   * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
+   */
+  maxFacts?: number;
 }
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   windowTurns: 20,
   consolidateEvery: 10,
+  maxFacts: 25,
 };
 
 const LANG_NAME: Record<Lang, string> = { ko: "Korean", ja: "Japanese", en: "English" };
@@ -70,6 +76,7 @@ export class MemoryManager {
     if (slice.length === 0) return memory;
 
     const name = card.name[lang] ?? card.id;
+    const maxFacts = this.cfg.maxFacts ?? 25;
     const transcript = slice
       .map((t) => `${t.role === "user" ? "User" : name}: ${t.content}`)
       .join("\n");
@@ -82,7 +89,7 @@ export class MemoryManager {
       '  "facts": ["short standalone facts worth remembering verbatim: names, promises, preferences, events, nicknames"],',
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
       "}",
-      "Keep facts from existing memory unless contradicted. Max 25 facts; merge duplicates.",
+      `Keep facts from existing memory unless contradicted. Max ${maxFacts} facts; merge duplicates.`,
       `Attribute every fact to the right person and start it with their name (the user or ${name}). What the user tells ${name} about themselves is a fact about the USER, even when ${name} reacts to it.`,
       ...(this.cfg.rules === "v2"
         ? [
@@ -107,7 +114,7 @@ export class MemoryManager {
     if (!parsed) return { ...memory, coveredUpTo: toExclusive - 1 };
 
     const facts = Array.isArray(parsed.facts)
-      ? parsed.facts.filter((f: unknown): f is string => typeof f === "string").slice(0, 25)
+      ? parsed.facts.filter((f: unknown): f is string => typeof f === "string").slice(0, maxFacts)
       : memory.facts;
     const notes = Array.isArray(parsed.relationship?.notes)
       ? parsed.relationship.notes.filter((n: unknown): n is string => typeof n === "string").slice(0, 8)
