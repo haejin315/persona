@@ -93,7 +93,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false, v12 = false, v13 = false, v14 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false, v12 = false, v13 = false, v14 = false, v15 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
   v8
@@ -121,7 +121,8 @@ ${
 - MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.${
               v13
                 ? `
-- The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices and the rules of this world stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it. When ${user} puts words in your mouth that are not in MEMORY or this conversation, correct it only if something turns on it - an agreement, a distance, a price, a rule of this world; otherwise answer the point and let the wording pass. "I don't remember saying that" is not a habit: never in two consecutive replies. Letting the wording pass is never withholding what you know: a detail MEMORY holds - a name, a title, a number - is said out loud when ${user} brings it up, even if ${user} offers to tell it later.${v14 ? `
+- The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices and the rules of this world stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it. When ${user} puts words in your mouth that are not in MEMORY or this conversation, correct it only if something turns on it - an agreement, a distance, a price, a rule of this world; otherwise answer the point and let the wording pass. "I don't remember saying that" is not a habit: never in two consecutive replies. Letting the wording pass is never withholding what you know: a detail MEMORY holds - a name, a title, a number - is said out loud when ${user} brings it up, even if ${user} offers to tell it later.${v15 ? `
+- Every fact in MEMORY says how you know it, and every fact in MEMORY did reach you: a fact marked as told by ${user} is something ${user} told you, even if you cannot place the moment, so never greet it as news. When it matters, say how you know ("you told me", "I heard it from X"). What reached you second-hand you hold as hearsay. Only what is in neither MEMORY nor this conversation is unknown to you, however plausible it is.` : v14 ? `
 - Every fact in MEMORY says how you know it. You know only what you saw, what ${user} told you, what someone else told you, or what you said yourself. When it matters, say how you know ("you told me", "I heard it from X"). What reached you second-hand you hold as hearsay, and what never reached you, you do not know, however plausible it is.` : ""}`
                 : v12
                 ? `
@@ -185,7 +186,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -255,7 +256,7 @@ Facts to remember:
 ${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12)))}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9, variety >= 10, variety >= 11, variety >= 12)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9, variety >= 10, variety >= 11, variety >= 12, variety >= 13)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -479,6 +480,19 @@ export const v14Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 12),
 };
 
+/**
+ * v15: v14 with the provenance sentence turned the other way round. v14's "what never reached you,
+ * you do not know" made Haru greet facts that were in MEMORY as news (200-turn memory 4.65 -> 4.10:
+ * "이름 아는 건 오늘 처음이에요" for a cat named 100 turns earlier). v15 keeps "say how you know" and
+ * adds the inverse guarantee: every MEMORY fact did reach you, so a fact labelled "user told you" is
+ * never heard for the first time; only what is in neither MEMORY nor the conversation is unknown.
+ */
+export const v15Structured: PromptVersion = {
+  id: "v15-structured",
+  description: "v14 + every MEMORY fact did reach you: never greet a stored fact as news; unknown is only what is in neither MEMORY nor the conversation.",
+  build: (ctx) => buildV2(ctx, "card", 13),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -494,6 +508,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v12Structured.id]: v12Structured,
   [v13Structured.id]: v13Structured,
   [v14Structured.id]: v14Structured,
+  [v15Structured.id]: v15Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,
