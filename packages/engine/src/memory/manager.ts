@@ -31,8 +31,9 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   windowTurns: 20,
   consolidateEvery: 10,
   maxFacts: 25,
-  // v2 since 2026-10-22: proper nouns kept (docs/02, 03); the 50-turn A/B showed no regression.
-  rules: "v2",
+  // v3 since 2026-10-22: proper nouns kept (v2) plus a source per fact (docs/10 step 1).
+  // The 50-turn A/B kept recall, fact count and cost equal to v2.
+  rules: "v3",
 };
 
 const LANG_NAME: Record<Lang, string> = { ko: "Korean", ja: "Japanese", en: "English" };
