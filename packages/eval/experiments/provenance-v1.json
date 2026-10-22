@@ -1,0 +1,39 @@
+{
+  "scenarioIds": [
+    "haru-ko",
+    "kael-ko"
+  ],
+  "arms": [
+    {
+      "id": "v13-rules2/sonnet",
+      "promptVersion": "v13-structured",
+      "model": "claude-cli:sonnet",
+      "memory": {
+        "rules": "v2"
+      }
+    },
+    {
+      "id": "v13-rules3/sonnet",
+      "promptVersion": "v13-structured",
+      "model": "claude-cli:sonnet",
+      "memory": {
+        "rules": "v3"
+      }
+    },
+    {
+      "id": "v14-rules3/sonnet",
+      "promptVersion": "v14-structured",
+      "model": "claude-cli:sonnet",
+      "memory": {
+        "rules": "v3"
+      }
+    }
+  ],
+  "userTurns": 50,
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 2,
+  "replayFrom": "eval-results/regen-fix-v4",
+  "replayArmId": "v4-structured/sonnet",
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/provenance-v1"
+}

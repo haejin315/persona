@@ -1,5 +1,5 @@
 import type { LLMProvider } from "../providers/types.js";
-import type { CharacterCard, Lang, MemoryState, TokenUsage, Turn } from "../types.js";
+import { toFact, type CharacterCard, type Fact, type Lang, type MemoryState, type TokenUsage, type Turn } from "../types.js";
 
 export interface MemoryConfig {
   /** Number of most recent turns kept verbatim in the prompt. */
@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2";
+  rules?: "v1" | "v2" | "v3";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -88,14 +88,21 @@ export class MemoryManager {
       "Given the EXISTING memory and NEW transcript lines, output JSON only:",
       "{",
       `  "summary": "updated running summary, 3-8 sentences, past tense, written in ${LANG_NAME[lang]}",`,
-      '  "facts": ["short standalone facts worth remembering verbatim: names, promises, preferences, events, nicknames"],',
+      this.cfg.rules === "v3"
+        ? `  "facts": [{"text": "short standalone fact worth remembering verbatim: names, promises, preferences, events, nicknames", "source": "user | self | witnessed | told | rumor", "by": "who told ${name} - only when source is told"}],`
+        : '  "facts": ["short standalone facts worth remembering verbatim: names, promises, preferences, events, nicknames"],',
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
       "}",
       `Keep facts from existing memory unless contradicted. Max ${maxFacts} facts; merge duplicates.`,
       `Attribute every fact to the right person and start it with their name (the user or ${name}). What the user tells ${name} about themselves is a fact about the USER, even when ${name} reacts to it.`,
-      ...(this.cfg.rules === "v2"
+      ...(this.cfg.rules === "v2" || this.cfg.rules === "v3"
         ? [
             `Proper nouns are the memory. A place, person, pet, shop or title the user names is kept verbatim inside a fact, and merging facts never drops a name an earlier fact had. A fact about where someone lives or goes names the place; "moved to a 4th-floor flat" without the neighbourhood is a lost fact.`,
+          ]
+        : []),
+      ...(this.cfg.rules === "v3"
+        ? [
+            `"source" is how ${name} knows the fact. "user": the user said it to ${name}. "self": ${name} said, promised or decided it (opening hours, habits, promises) - keep these, ${name} must stay consistent with them. "witnessed": it happened in the scene in front of ${name}. "told": a third person told ${name} - put their name in "by". "rumor": heard with no source. A fact keeps the source it already has; repeating a fact does not make it better known.`,
           ]
         : []),
     ].join("\n");
@@ -105,7 +112,8 @@ export class MemoryManager {
         { role: "system", content: system },
         {
           role: "user",
-          content: `EXISTING MEMORY:\n${JSON.stringify(memory, null, 2)}\n\nNEW TRANSCRIPT (turns ${from}-${toExclusive - 1}):\n${transcript}`,
+          // v1/v2 keep the string shape they were measured with; v3 shows the stored sources.
+          content: `EXISTING MEMORY:\n${JSON.stringify(this.cfg.rules === "v3" ? memory : { ...memory, facts: memory.facts.map((f) => f.text) }, null, 2)}\n\nNEW TRANSCRIPT (turns ${from}-${toExclusive - 1}):\n${transcript}`,
         },
       ],
       { model: this.cfg.model, temperature: 0.2, maxTokens: 900 },
@@ -115,8 +123,8 @@ export class MemoryManager {
     const parsed = safeJson(res.text);
     if (!parsed) return { ...memory, coveredUpTo: toExclusive - 1 };
 
-    const facts = Array.isArray(parsed.facts)
-      ? parsed.facts.filter((f: unknown): f is string => typeof f === "string").slice(0, maxFacts)
+    const facts: Fact[] = Array.isArray(parsed.facts)
+      ? (parsed.facts as unknown[]).map(toFact).filter((f): f is Fact => !!f).slice(0, maxFacts)
       : memory.facts;
     const notes = Array.isArray(parsed.relationship?.notes)
       ? parsed.relationship.notes.filter((n: unknown): n is string => typeof n === "string").slice(0, 8)

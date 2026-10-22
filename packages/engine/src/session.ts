@@ -6,6 +6,7 @@ import {
   DEFAULT_PERSONA,
   emptyMemory,
   fillUser,
+  normalizeMemory,
   type CharacterCard,
   type ChatMessage,
   type Lang,
@@ -146,7 +147,7 @@ export class ChatSession {
 
   restore(snap: Pick<SessionSnapshot, "turns" | "memory" | "persona">): void {
     this.turns = [...snap.turns];
-    this.memory = structuredClone(snap.memory);
+    this.memory = normalizeMemory(structuredClone(snap.memory));
     this.persona = { ...snap.persona };
   }
 

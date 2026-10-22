@@ -1,4 +1,4 @@
-import { findCharacter, type CharacterCard, type Lang, type LLMProvider, type MemoryState, type Turn } from "@persona/engine";
+import { findCharacter, normalizeMemory, renderFact, type CharacterCard, type Lang, type LLMProvider, type MemoryState, type Turn } from "@persona/engine";
 import { checkFormat, formatScore } from "./format.js";
 import { findScenario } from "./scenarios.js";
 import { METRICS, type CheckpointScore, type ConversationRecord, type Metric, type ProbeResult, type Scenario, type ScoreRecord } from "./types.js";
@@ -81,12 +81,12 @@ export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 60
 /** The character's own memory state at a checkpoint (latest consolidation before the window), when the record has snapshots. */
 export function memoryAt(rec: ConversationRecord, beforeIndex: number): MemoryState | undefined {
   const snaps = rec.memorySnapshots?.filter((s) => s.afterTurnIndex < beforeIndex);
-  return snaps?.length ? snaps[snaps.length - 1]!.memory : undefined;
+  return snaps?.length ? normalizeMemory(snaps[snaps.length - 1]!.memory) : undefined;
 }
 
 function memoryBlock(m: MemoryState | undefined): string {
   if (!m) return "";
-  const facts = m.facts.length ? m.facts.map((f) => `- ${f}`).join("\n") : "- (none yet)";
+  const facts = m.facts.length ? m.facts.map((f) => `- ${renderFact(f, "the user", true)}`).join("\n") : "- (none yet)";
   return `
 WHAT THE CHARACTER'S OWN MEMORY HOLDS AT THIS POINT (the summary and facts the engine gave the character; relationship stage: ${m.relationship.stage}). Using these is correct memory; contradicting them is a memory slip; a detail that is here but phrased as new to the character is a slip:
 ${m.summary || "(no summary yet)"}

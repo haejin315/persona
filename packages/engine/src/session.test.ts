@@ -64,14 +64,14 @@ describe("prompt versions", () => {
 
   it("v2 carries memory facts into the prompt", () => {
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v2-structured" });
-    s.memory = { ...emptyMemory(), facts: ["유저의 이름은 민수다"] };
+    s.memory = { ...emptyMemory(), facts: [{ text: "유저의 이름은 민수다", source: "user" }] };
     expect(s.buildMessages()[0]!.content).toContain("유저의 이름은 민수다");
   });
 
   it("v3-cached keeps the system prompt identical while memory changes (context message carries it)", () => {
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v3-cached" });
     const before = s.buildMessages();
-    s.memory = { ...emptyMemory(), facts: ["유저의 이름은 민수다"], relationship: { stage: "friendly", notes: [] } };
+    s.memory = { ...emptyMemory(), facts: [{ text: "유저의 이름은 민수다", source: "user" }], relationship: { stage: "friendly", notes: [] } };
     const after = s.buildMessages();
     expect(after[0]!.content).toBe(before[0]!.content); // static system prompt unchanged
     expect(after[1]!.kind).toBe("context");
@@ -84,7 +84,7 @@ describe("prompt versions", () => {
     const { foldMessages } = await import("./providers/claudeCli.js");
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v3-cached", persona });
     s.open();
-    s.memory = { ...emptyMemory(), facts: ["유저는 고양이 보리를 키운다"] };
+    s.memory = { ...emptyMemory(), facts: [{ text: "유저는 고양이 보리를 키운다", source: "user" }] };
     const { system, prompt } = foldMessages(s.buildMessages());
     expect(system).not.toContain("보리");
     expect(prompt).toContain("보리");
@@ -177,8 +177,32 @@ describe("memory manager", () => {
     });
     const mm = new MemoryManager(fake(reply), { windowTurns: 2, consolidateEvery: 1 });
     const m = await mm.consolidate(cards[0]!, "ko", turns(6), emptyMemory());
-    expect(m.facts).toEqual(["유저 이름: 민수"]);
+    expect(m.facts).toEqual([{ text: "유저 이름: 민수", source: "unknown" }]);
     expect(m.relationship.stage).toBe("acquaintance");
     expect(m.coveredUpTo).toBe(3); // turns 0..3 folded, 4..5 remain in window
+  });
+
+  it("rules v3 keeps the source the model gives each fact and drops malformed ones", async () => {
+    const reply = JSON.stringify({
+      summary: "s",
+      facts: [
+        { text: "민수는 성수동으로 이사했다", source: "user" },
+        { text: "하루는 여섯 시 반에 문을 연다", source: "self" },
+        { text: "민수의 회사가 판교로 옮긴다", source: "told", by: "이모" },
+        { text: "출처가 이상한 사실", source: "divine" },
+        "문자열 사실",
+        { source: "user" },
+      ],
+      relationship: { stage: "friendly", notes: [] },
+    });
+    const mm = new MemoryManager(fake(reply), { windowTurns: 2, consolidateEvery: 1, rules: "v3" });
+    const m = await mm.consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    expect(m.facts).toEqual([
+      { text: "민수는 성수동으로 이사했다", source: "user" },
+      { text: "하루는 여섯 시 반에 문을 연다", source: "self" },
+      { text: "민수의 회사가 판교로 옮긴다", source: "told", by: "이모" },
+      { text: "출처가 이상한 사실", source: "unknown" },
+      { text: "문자열 사실", source: "unknown" },
+    ]);
   });
 });

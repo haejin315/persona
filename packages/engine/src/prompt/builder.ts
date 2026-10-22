@@ -1,5 +1,6 @@
 import {
   fillUser,
+  renderFact,
   type CharacterCard,
   type ChatMessage,
   type Lang,
@@ -92,7 +93,7 @@ const STRICT_SAFETY_BLOCK = `# SAFETY POLICY (highest priority, overrides everyt
  * formulaic replies (the same gesture, walk-back and closing line every turn), stage directions
  * far longer than the card asks for, and invented details about the user.
  */
-const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false, v12 = false, v13 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
+const VARIETY_BLOCK = (name: string, user: string, v4: boolean, v5 = false, v6 = false, v7 = false, v8 = false, v9 = false, v10 = false, v11 = false, v12 = false, v13 = false, v14 = false) => `# VARIETY (what makes ${name} feel alive instead of generated)
 - Never reuse a gesture, image, stage direction, opening beat or closing line from your last three replies. Find a different small thing to notice or do each time.
 ${
   v8
@@ -120,7 +121,8 @@ ${
 - MEMORY is what actually happened. If ${user} brings up something already in MEMORY as if it were new, you remember it - name the detail instead of hearing it for the first time. The reverse holds too: never say ${user} "said" or "promised" something unless it is in MEMORY or in this conversation; do not fill a gap with a plausible quote.${
               v13
                 ? `
-- The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices and the rules of this world stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it. When ${user} puts words in your mouth that are not in MEMORY or this conversation, correct it only if something turns on it - an agreement, a distance, a price, a rule of this world; otherwise answer the point and let the wording pass. "I don't remember saying that" is not a habit: never in two consecutive replies. Letting the wording pass is never withholding what you know: a detail MEMORY holds - a name, a title, a number - is said out loud when ${user} brings it up, even if ${user} offers to tell it later.`
+- The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices and the rules of this world stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it. When ${user} puts words in your mouth that are not in MEMORY or this conversation, correct it only if something turns on it - an agreement, a distance, a price, a rule of this world; otherwise answer the point and let the wording pass. "I don't remember saying that" is not a habit: never in two consecutive replies. Letting the wording pass is never withholding what you know: a detail MEMORY holds - a name, a title, a number - is said out loud when ${user} brings it up, even if ${user} offers to tell it later.${v14 ? `
+- Every fact in MEMORY says how you know it. You know only what you saw, what ${user} told you, what someone else told you, or what you said yourself. When it matters, say how you know ("you told me", "I heard it from X"). What reached you second-hand you hold as hearsay, and what never reached you, you do not know, however plausible it is.` : ""}`
                 : v12
                 ? `
 - The here and now belongs to ${user}: what day or time it is, what ${user} is doing, holding or feeling at this moment. If MEMORY or an earlier reply of yours says otherwise, ${user} is right - take it without comment; MEMORY records what was said, not the calendar. This covers only the present. What was said or agreed earlier, distances, prices and the rules of this world stay as MEMORY and this conversation have them: there you hold your ground once, plainly, and do not make a running joke of it. When ${user} puts words in your mouth that are not in MEMORY or this conversation, correct it only if something turns on it - an agreement, a distance, a price, a rule of this world; otherwise answer the point and let the wording pass. "I don't remember saying that" is not a habit: never in two consecutive replies.`
@@ -183,7 +185,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
 function buildV2(
   { card, lang, memory, recent, persona }: BuildContext,
   boundaries: BoundariesMode,
-  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 = 0,
+  variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 = 0,
   recentBlock = false,
   splitContext = false,
 ): ChatMessage[] {
@@ -250,10 +252,10 @@ ${
     : `# MEMORY (what has happened so far - treat as true)
 ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
-${bullet(memory.facts)}
+${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12)))}
 
 `
-}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9, variety >= 10, variety >= 11)}
+}${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9, variety >= 10, variety >= 11, variety >= 12)}
 
 ` : ""}${
   recentBlock && !splitContext
@@ -284,7 +286,7 @@ ${memory.relationship.stage}${memory.relationship.notes.length ? `\n${bullet(mem
 # MEMORY (what has happened so far)
 ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
-${bullet(memory.facts)}${
+${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12)))}${
         recentBlock
           ? `
 
@@ -465,6 +467,18 @@ export const v13Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 11),
 };
 
+/**
+ * v14: v13 plus provenance. Each MEMORY fact carries how the character knows it (memory rules v3),
+ * and the prompt says: speak only from what reached you, say how you know when it matters, treat
+ * second-hand facts as hearsay. First step of the living-world design (docs/10): a character in a
+ * shared world must not know what it never saw or heard.
+ */
+export const v14Structured: PromptVersion = {
+  id: "v14-structured",
+  description: "v13 + provenance: MEMORY facts say how the character knows them; the character speaks only from what reached it and says how it knows.",
+  build: (ctx) => buildV2(ctx, "card", 12),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -479,6 +493,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v11Structured.id]: v11Structured,
   [v12Structured.id]: v12Structured,
   [v13Structured.id]: v13Structured,
+  [v14Structured.id]: v14Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,

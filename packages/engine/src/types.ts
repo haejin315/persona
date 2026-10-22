@@ -108,12 +108,64 @@ export interface Turn {
   meta?: { model?: string; promptVersion?: string; latencyMs?: number; usage?: TokenUsage; filters?: string[] };
 }
 
+/**
+ * How the character knows a fact (docs/10, step 1). "user": the user said it to the character.
+ * "self": the character said, promised or decided it (opening hours, promises) - the character must
+ * stay consistent with these. "witnessed": it happened in the scene. "told": a third person told the
+ * character (`by`). "rumor": heard without a source. "unknown": stored before sources existed.
+ */
+export type FactSource = "user" | "self" | "witnessed" | "told" | "rumor" | "unknown";
+export const FACT_SOURCES: readonly FactSource[] = ["user", "self", "witnessed", "told", "rumor", "unknown"];
+
+export interface Fact {
+  text: string;
+  source: FactSource;
+  /** Who told the character, when `source` is "told". */
+  by?: string;
+}
+
+/** Accept a stored fact in either shape (old recordings hold plain strings). */
+export function toFact(f: unknown): Fact | undefined {
+  if (typeof f === "string") return f.trim() ? { text: f.trim(), source: "unknown" } : undefined;
+  if (f && typeof f === "object") {
+    const o = f as Record<string, unknown>;
+    if (typeof o.text !== "string" || !o.text.trim()) return undefined;
+    const source = FACT_SOURCES.includes(o.source as FactSource) ? (o.source as FactSource) : "unknown";
+    const by = typeof o.by === "string" && o.by.trim() ? o.by.trim() : undefined;
+    return { text: o.text.trim(), source, ...(by ? { by } : {}) };
+  }
+  return undefined;
+}
+
+export const factText = (f: Fact | string): string => (typeof f === "string" ? f : f.text);
+
+/** Bring a stored memory (possibly from an old recording with string facts) to the current shape. */
+export function normalizeMemory(m: MemoryState): MemoryState {
+  return { ...m, facts: (m.facts as unknown[]).map(toFact).filter((f): f is Fact => !!f) };
+}
+
+/**
+ * One prompt line per fact. With `provenance` the way the character knows it follows the fact, so the
+ * prompt can ask the character to speak only from what reached them and to say how it did.
+ */
+export function renderFact(f: Fact, user: string, provenance: boolean): string {
+  if (!provenance || f.source === "unknown") return f.text;
+  const how: Record<Exclude<FactSource, "unknown">, string> = {
+    user: `${user} told you`,
+    self: "you said this yourself",
+    witnessed: "you saw this happen",
+    told: f.by ? `${f.by} told you` : "someone told you",
+    rumor: "rumour, unconfirmed",
+  };
+  return `${f.text} (${how[f.source]})`;
+}
+
 /** Long-term memory distilled from the conversation. */
 export interface MemoryState {
   /** Rolling summary of everything older than the short-term window. */
   summary: string;
-  /** Discrete facts worth keeping verbatim: user's name, promises, shared events. */
-  facts: string[];
+  /** Discrete facts worth keeping verbatim, each with how the character knows it. */
+  facts: Fact[];
   /** Relationship stage as the engine perceives it; drives tone progression. */
   relationship: { stage: string; notes: string[] };
   /** Turn index up to which the summary/facts are current. */
