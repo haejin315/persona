@@ -16,7 +16,7 @@ places:
     name: 헌책방 '책다락'
     region: 동네
     hours: 11시~19시, 화요일 휴무
-    note: 좁고 책이 천장까지 쌓인 헌책방. 주인은 50대 남자 사장으로 말이 느리고 손님이 찾는 책을 메모지에 적어 두는 버릇이 있다. 하루의 이모가 자주 책을 주문한다.
+    note: 좁고 책이 천장까지 쌓인 헌책방. 윤 사장이 혼자 본다. 하루의 이모가 자주 책을 주문한다.
   - id: haru-home
     name: 하루의 집
     region: 동네
@@ -24,6 +24,9 @@ places:
     name: 성수동
     region: 성수
     note: 민수가 이사 간 동네. 4층 엘리베이터 없는 집.
+  - id: yoon-home
+    name: 윤 사장의 집
+    region: 동네
 characters:
   - id: haru
     name: 하루
@@ -33,3 +36,13 @@ characters:
       afternoon: cafe
       evening: haru-home
       night: haru-home
+  # Added 2026-10-23 for T2. From this point a task at the bookshop in an open slot resolves as a
+  # scene between Haru and Yoon (T1 before this date resolved alone).
+  - id: yoon
+    name: 윤 사장
+    tier: main
+    routine:
+      morning: bookshop
+      afternoon: bookshop
+      evening: bookshop
+      night: yoon-home
