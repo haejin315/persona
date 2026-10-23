@@ -75,13 +75,17 @@ export const WorldScenario = z.object({
   lang: z.enum(["ko", "ja", "en"]),
   persona: z.object({ name: z.string(), description: z.string().optional() }),
   userStyle: z.string(),
+  /** Per character id: what the character already remembers when the scenario starts. */
   seedMemory: z
-    .object({
-      summary: z.string().default(""),
-      facts: z.array(FactSchema).default([]),
-      relationship: z.object({ stage: z.string().default("initial"), notes: z.array(z.string()).default([]) }).default({}),
-    })
-    .optional(),
+    .record(
+      z.string(),
+      z.object({
+        summary: z.string().default(""),
+        facts: z.array(FactSchema).default([]),
+        relationship: z.object({ stage: z.string().default("initial"), notes: z.array(z.string()).default([]) }).default({}),
+      }),
+    )
+    .default({}),
   phases: z.array(z.discriminatedUnion("kind", [ChatPhase, AdvancePhase])).min(1),
 });
 export type WorldScenario = z.infer<typeof WorldScenario>;
@@ -254,11 +258,12 @@ export async function runWorldConversation(
         memory: { model: mem.model, ...(arm.memory ?? {}) },
         filters: arm.filters,
       });
-      if (scenario.seedMemory) {
+      const seed = scenario.seedMemory[p.characterId];
+      if (seed) {
         session.memory = {
-          summary: scenario.seedMemory.summary,
-          facts: scenario.seedMemory.facts.map((f) => ({ text: f.text, source: f.source, ...(f.by ? { by: f.by } : {}) })),
-          relationship: { stage: scenario.seedMemory.relationship.stage, notes: [...scenario.seedMemory.relationship.notes] },
+          summary: seed.summary,
+          facts: seed.facts.map((f) => ({ text: f.text, source: f.source, ...(f.by ? { by: f.by } : {}) })),
+          relationship: { stage: seed.relationship.stage, notes: [...seed.relationship.notes] },
           coveredUpTo: -1,
         };
       }

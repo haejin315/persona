@@ -24,7 +24,7 @@ const persona = { name: "민수", description: "28살 회사원" };
 
 describe("character cards", () => {
   it("load and have ko + ja style blocks", () => {
-    expect(cards.map((c) => c.id).sort()).toEqual(["haru", "kael"]);
+    expect(cards.map((c) => c.id).sort()).toEqual(["haru", "kael", "yoon"]);
     for (const c of cards) {
       expect(c.style.ko).toBeDefined();
       expect(c.style.ja).toBeDefined();

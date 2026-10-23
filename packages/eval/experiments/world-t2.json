@@ -1,0 +1,15 @@
+{
+  "scenarioId": "t2-relay",
+  "arms": [
+    { "id": "v13/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true },
+    { "id": "v15/sonnet", "promptVersion": "v15-structured", "model": "claude-cli:sonnet", "worldSync": true },
+    { "id": "v14/sonnet", "promptVersion": "v14-structured", "model": "claude-cli:sonnet", "worldSync": true }
+  ],
+  "repeats": 3,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "judgeModel": "claude-cli:opus",
+  "replayArmId": "v13/sonnet",
+  "outDir": "eval-results/world-t2"
+}

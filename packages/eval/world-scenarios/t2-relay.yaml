@@ -1,0 +1,102 @@
+# T2 · 전언 (docs/10 test ladder). User + two main characters.
+# Day 1: the user asks Haru to fetch a book from Yoon's shop this afternoon, and tells Haru one
+# private thing. The world advances: Haru and Yoon are at the shop in the same slot, so the errand
+# resolves as a scene between them (one call: scene + result + what each told the other). Day 2:
+# the user talks to YOON, not Haru. Measured: does Yoon speak from what he witnessed, does he
+# attribute what Haru told him ("하루 씨가 그러던데"), and does he NOT know what Haru never passed
+# on. Then a short chat with Haru checks that her account matches the same ledger.
+id: t2-relay
+world: haru-town
+lang: ko
+persona:
+  name: 민수
+  description: 28살, 작은 디자인 회사에 올해 들어온 신입. 몇 달째 아침마다 카페 '모퉁이'에 오는 단골이고, 헌책방 '책다락'에도 몇 번 들렀다.
+userStyle: >
+  존댓말. 짧게 1~2문장으로 말하고, 지문은 세 번에 한 번 정도 짧게 쓴다. 감정보다 상황을 말한다.
+  상대가 전에 한 말을 가끔 되짚어 말한다.
+seedMemory:
+  haru:
+    summary: >
+      민수는 몇 달 동안 매일 아침 7시쯤 와서 아메리카노를 마시는 단골이다. 서로 이름을 알게 된 뒤로 주문 외의 대화를 조금씩 주고받는다.
+      하루는 어제 아침 민수에게 "내일 오후에 이모 심부름으로 헌책방 '책다락'에 간다"고 말했다.
+    facts:
+      - { text: "민수의 이름은 민수다", source: user }
+      - { text: "민수는 디자인 회사에 올해 들어온 신입이다", source: user }
+      - { text: "민수는 고양이 보리를 키운다", source: user }
+      - { text: "민수는 성수동 4층 엘리베이터 없는 집에 산다", source: user }
+      - { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: user }
+      - { text: "하루는 오늘 오후에 이모 심부름으로 헌책방 '책다락'에 가서 이모가 주문한 책을 받아 온다 (어제 민수에게 말했다)", source: self }
+    relationship:
+      stage: friendly
+      notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
+  yoon:
+    summary: >
+      민수는 몇 번 들른 손님이다. 지난주에 옛 만화책 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다.
+      하루는 카페 '모퉁이'의 바리스타로, 이모가 주문한 책을 받아 가려고 가끔 들른다.
+    facts:
+      - { text: "민수는 지난주에 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다", source: user }
+      - { text: "하루는 카페 '모퉁이'의 바리스타이고 이모가 주문한 책을 받아 가려고 가끔 들른다", source: witnessed }
+    relationship:
+      stage: acquaintance
+      notes: ["책을 찾아 달라고 부탁한 손님"]
+phases:
+  - kind: chat
+    characterId: haru
+    userTurns: 6
+    beats:
+      - fromUserTurn: 1
+        goal: 평소처럼 아침 커피를 주문하며 인사한다. 하루가 어제 "내일 오후에 이모 심부름으로 책다락에 간다"고 한 말을 떠올리며 오늘 오후에 가는 게 맞는지 확인한다.
+      - fromUserTurn: 2
+        goal: >
+          심부름을 부탁한다. 오늘 오후에 책다락에 가면, 민수가 지난주에 사장님께 찾아 달라고 부탁해 둔 옛 만화책 『달빛 고양이』 단행본(90년대, 두 권짜리)이
+          들어왔는지 물어보고, 들어왔으면 대신 받아 와 달라고. 책값은 지난주에 미리 냈다고 말한다.
+        reveal:
+          - 민수는 지난주에 책다락 사장님께 『달빛 고양이』 단행본(두 권)을 찾아 달라고 부탁하고 책값을 미리 냈다
+      - fromUserTurn: 4
+        goal: >
+          하루에게만 털어놓는다. 판교의 큰 회사에서 이직 제안을 받았고 다음 주까지 답해야 하는데 아직 아무에게도 말하지 않았다고.
+          비밀로 해 달라는 말은 하지 않되, 하루 말고는 모르는 얘기라고 한다. 그 뒤 출근한다고 인사한다.
+        reveal:
+          - 민수는 판교의 큰 회사에서 이직 제안을 받았고 다음 주까지 답해야 한다. 하루 외에는 아무에게도 말하지 않았다
+  - kind: advance
+    days: 1
+  - kind: chat
+    characterId: yoon
+    userTurns: 6
+    beats:
+      - fromUserTurn: 1
+        goal: 다음날 낮, 책다락에 들어가 인사한다. 어제 하루 씨가 들렀는지, 책은 하루 씨한테 건네줬는지 묻는다.
+      - fromUserTurn: 2
+        goal: 하루 씨가 와서 무슨 얘기를 했는지, 책 상태는 어땠는지 묻는다. 사장님이 말하지 않은 세부는 캐묻되 답을 암시하지 않는다.
+      - fromUserTurn: 4
+        goal: 하루 씨가 혹시 자기 회사 일이나 이직 얘기도 하던가 묻는다. 그 뒤 고맙다고 하고 가볍게 마무리한다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 어제 하루 씨가 들렀는지, 책은 건네줬는지 묻는다
+        expected: "@ledger.result"
+      - atUserTurn: 2
+        kind: recall
+        ask: 하루 씨가 와서 무슨 얘기를 했는지, 책이 어땠는지 묻는다
+        expected: "@ledger.details and told"
+      - atUserTurn: 4
+        kind: negative
+        ask: 하루 씨가 민수의 회사 일이나 이직 얘기도 하던가 묻는다
+        expected: "@ledger.none (unless the ledger says Haru told Yoon)"
+  - kind: chat
+    characterId: haru
+    userTurns: 4
+    beats:
+      - fromUserTurn: 1
+        goal: 같은 날 저녁 무렵 카페에 들러, 어제 책다락에서 사장님과 무슨 얘기를 했는지 묻는다. 책다락에 다녀왔다는 말은 아직 하지 않는다.
+      - fromUserTurn: 3
+        goal: 사장님이 자기 얘기(이직)를 알고 있는 것 같던데 하루가 말했는지 넌지시 묻는다. 그 뒤 가볍게 마무리한다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 어제 책다락에서 사장님과 무슨 얘기를 했는지 묻는다
+        expected: "@ledger.result and details"
+      - atUserTurn: 3
+        kind: negative
+        ask: 사장님에게 민수의 이직 얘기를 했는지 묻는다
+        expected: "@ledger (true only if the ledger says Haru told Yoon; otherwise Haru must say she did not)"
