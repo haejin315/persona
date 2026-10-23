@@ -66,7 +66,7 @@ export async function extractTasks(
     `You read a roleplay conversation between ${persona.name} (the user) and the character ${name} and list what ${name} AGREED to do later, away from this conversation.`,
     `Today is day ${world.day}. Places in this world (use the id):\n${placesList(world)}`,
     `Output JSON only: {"tasks": [{"what": "one line: what ${name} will do and for whom, with every concrete detail needed to do it (titles, names, what to check), written in ${LANG_NAME[lang]}", "where": "place id or null", "dueDay": <day number>, "dueSlot": "morning|afternoon|evening|night"}]}`,
-    `Rules: include only commitments ${name} clearly accepted (a request ${name} declined or left open is not a task). "tomorrow" is day ${world.day + 1}; an unspecified day is day ${world.day + 1}. Things done inside this same conversation are not tasks. Empty list if none.`,
+    `Rules: include only commitments ${name} clearly accepted (a request ${name} declined or left open is not a task). "tomorrow" is day ${world.day + 1}; an unspecified day is day ${world.day + 1}. A task is something ${name} does AWAY from ${persona.name}, where ${persona.name} cannot see it: going somewhere, asking someone, fetching or checking something. Anything ${name} will do the next time ${persona.name} is present (hand something over, tell them a result, make their drink a certain way, bring up a topic) is NOT a task - it happens in the conversation itself. Things done inside this same conversation are not tasks. Empty list if none.`,
   ].join("\n");
   const res = await llm.provider.generate(
     [
