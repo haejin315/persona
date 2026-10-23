@@ -1,0 +1,10 @@
+{
+  "scenarioId": "t1-errand",
+  "arms": [
+    { "id": "world/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": true },
+    { "id": "no-world/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": false }
+  ],
+  "repeats": 1,
+  "judgeModel": "fake",
+  "outDir": "eval-results/world-smoke"
+}

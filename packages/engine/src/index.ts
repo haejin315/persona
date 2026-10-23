@@ -6,3 +6,4 @@ export * from "./characters.js";
 export * from "./session.js";
 export * from "./filters.js";
 export * from "./observability/langfuse.js";
+export * from "./world/index.js";

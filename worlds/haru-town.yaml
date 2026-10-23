@@ -1,0 +1,35 @@
+# The shared world Haru's card lives in (docs/10). Places are a finite list so "same day, same slot,
+# same place" is a lookup, not a model call. Characters: `main` has a card, memory and schedule;
+# `named` is a few lines and a fixed routine (it only appears inside a main character's scene).
+id: haru-town
+startDay: 1
+places:
+  - id: cafe
+    name: 카페 '모퉁이'
+    region: 동네
+    hours: 아침 7시 오픈, 저녁 8시 마감
+    note: 이모가 운영하는 작은 카페. 하루가 아침 오픈을 맡는다. 창가 2인석이 민수의 자리.
+  - id: park
+    name: 카페 뒤편 골목의 작은 공원
+    region: 동네
+  - id: bookshop
+    name: 헌책방 '책다락'
+    region: 동네
+    hours: 11시~19시, 화요일 휴무
+    note: 좁고 책이 천장까지 쌓인 헌책방. 주인은 50대 남자 사장으로 말이 느리고 손님이 찾는 책을 메모지에 적어 두는 버릇이 있다. 하루의 이모가 자주 책을 주문한다.
+  - id: haru-home
+    name: 하루의 집
+    region: 동네
+  - id: seongsu
+    name: 성수동
+    region: 성수
+    note: 민수가 이사 간 동네. 4층 엘리베이터 없는 집.
+characters:
+  - id: haru
+    name: 하루
+    tier: main
+    routine:
+      morning: cafe
+      afternoon: cafe
+      evening: haru-home
+      night: haru-home

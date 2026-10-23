@@ -1,3 +1,4 @@
+import type { WorldBlock } from "../world/types.js";
 import {
   fillUser,
   renderFact,
@@ -17,6 +18,8 @@ export interface BuildContext {
   recent: Turn[];
   /** The user's character in the story. */
   persona: UserPersona;
+  /** The shared world's present, when the session lives in one (docs/10). Absent = prompt unchanged. */
+  world?: WorldBlock;
 }
 
 export interface PromptVersion {
@@ -183,8 +186,24 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
   return lines.length ? lines.join("\n") : "- (nothing yet)";
 }
 
+/**
+ * `# NOW` (docs/10 step 2). Only rendered when the session is in a shared world, so every prompt
+ * version measured before the world existed is byte-identical without one. What happened to the
+ * character off-screen is not here: it arrives as MEMORY facts with a `witnessed`/`told` source
+ * (world/sync.ts), so the same rules that govern remembering govern it.
+ */
+const NOW_BLOCK = (w: WorldBlock, user: string) => `# NOW
+Day ${w.day}, ${w.slot}. You are at ${w.place}.
+${
+  w.daysSinceUser === 0
+    ? ""
+    : `${w.daysSinceUser === 1 ? "A day has" : `${w.daysSinceUser} days have`} passed since you last spoke with ${user}. What you did and learned in between is in MEMORY, dated relative to today ("yesterday", "2 days ago"); it happened to you, so speak of it as your own experience when it comes up, and do not describe anything about those days that MEMORY does not hold.`
+}
+
+`;
+
 function buildV2(
-  { card, lang, memory, recent, persona }: BuildContext,
+  { card, lang, memory, recent, persona, world }: BuildContext,
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
@@ -247,7 +266,7 @@ ${REGISTER_BLOCK(name, lang)}
 ## Examples of how ${name} talks
 ${examples || "(none)"}
 
-${
+${world ? NOW_BLOCK(world, persona.name) : ""}${
   splitContext
     ? ""
     : `# MEMORY (what has happened so far - treat as true)

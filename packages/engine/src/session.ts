@@ -15,6 +15,7 @@ import {
   type Turn,
   type UserPersona,
 } from "./types.js";
+import type { WorldBlock } from "./world/types.js";
 
 export interface SessionOptions {
   card: CharacterCard;
@@ -56,6 +57,12 @@ export class ChatSession {
   persona: UserPersona;
   turns: Turn[] = [];
   memory: MemoryState = emptyMemory();
+  /**
+   * The present as the shared world has it (day, slot, place, days since the user was last seen).
+   * Unset in plain 1:1 sessions, in which case the prompt is exactly what it was before the world
+   * existed (docs/10 step 2). Set by world/sync.ts.
+   */
+  world?: WorldBlock;
   /** Memory-consolidation usage summed over the session (separate from reply usage on turns). */
   memoryUsage: TokenUsage & { calls: number; model?: string } = { promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0, calls: 0 };
 
@@ -97,6 +104,7 @@ export class ChatSession {
       memory: this.memory,
       recent: this.memoryManager.recentWindow(this.turns),
       persona: this.persona,
+      ...(this.world ? { world: this.world } : {}),
     });
   }
 

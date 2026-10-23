@@ -7,6 +7,8 @@
  *   npm run eval -- safety   eval-results/safety [--judge spec]                 # safety-vs-immersion audit
  *   npm run eval -- all      experiments/smoke.json          # run + judge + report + regen (+ safety if scenarios have checks)
  *   npm run eval -- backfill eval-results/prompt-version [more dirs…] [--include-fake] [--again] [--match <regex>]   # push recorded runs to Langfuse
+ *   npm run eval -- world    experiments/world-t1.json          # world scenario (docs/10): run phases + judge against the ledger + report
+ *   npm run eval -- world-judge <outDir> [--judge spec] | world-report <outDir>
  *
  * Cost controls: `estimate` prints the expected bill before anything runs; `maxUsd` in the config
  * stops a run once billed cost passes the cap; `replayFrom` reuses recorded user turns; a judge
@@ -27,6 +29,7 @@ import { recordFileName, runMatrix } from "./runner.js";
 import { auditSafety, safetyToMarkdown, summariseSafety } from "./safety.js";
 import { findScenario } from "./scenarios.js";
 import type { ConversationRecord, RegenRecord, RunConfig, SafetyRecord, ScoreRecord } from "./types.js";
+import { judgeWorld, readWorldRecords, readWorldScores, runWorldMatrix, worldReport, worldReportTitle, type WorldRunConfig } from "./world.js";
 
 const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
 
@@ -309,6 +312,46 @@ async function cmdBackfill(dirs: string[]) {
   console.log(`backfill: ${traces} traces, ${generations} generations, ~${scores} score groups → ${process.env.LANGFUSE_BASE_URL ?? "http://localhost:3000"}`);
 }
 
+async function cmdWorldJudge(outDir: string, spec: string) {
+  const budget = new BudgetTracker();
+  const { provider: raw, model } = resolveProvider(spec);
+  const provider = trackedProvider(raw, budget);
+  const recs = readWorldRecords(outDir);
+  const dir = join(outDir, "scores");
+  mkdirSync(dir, { recursive: true });
+  console.log(`world-judge: ${recs.length} run(s) against the ledger with ${raw.id}:${model ?? raw.defaultModel}`);
+  for (const rec of recs) {
+    const trace = startTrace(`world-judge:${rec.id}`, { metadata: { conversationId: rec.id, armId: rec.arm.id, judge: spec }, tags: ["world-judge", rec.scenarioId, rec.arm.id] });
+    const score = await judgeWorld(rec, { provider: observedProvider(provider, trace, "judge"), model });
+    trace.update({ output: score.totals });
+    trace.end();
+    const t = score.totals;
+    scoreTrace(rec.traceId, "world_fabricated", t.replies ? t.fabricated / t.replies : 0);
+    scoreTrace(rec.traceId, "world_recall", t.recallTotal ? t.recallOk / t.recallTotal : 0);
+    scoreTrace(rec.traceId, "world_negative_ok", t.negativeTotal ? t.negativeOk / t.negativeTotal : 0);
+    writeFileSync(join(dir, recordFileName(rec.id)), JSON.stringify(score, null, 2));
+    console.log(`✓ ${rec.id}  recall ${t.recallOk}/${t.recallTotal}  negative ${t.negativeOk}/${t.negativeTotal}  fabricated ${t.fabricated}/${t.replies}  unaware ${t.unaware}`);
+  }
+  printBudget("world-judge cost", budget);
+}
+
+function cmdWorldReport(outDir: string) {
+  const md = worldReport(readWorldRecords(outDir), readWorldScores(outDir), worldReportTitle(outDir));
+  writeFileSync(join(outDir, "report.md"), md);
+  console.log(md);
+}
+
+async function cmdWorld(cfgPath: string) {
+  const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as WorldRunConfig;
+  cfg.outDir = resolve(REPO_ROOT, cfg.outDir);
+  console.log(`world: ${cfg.scenarioId} × ${cfg.arms.length} arm(s) × ${cfg.repeats} → ${cfg.outDir}`);
+  const t0 = Date.now();
+  await runWorldMatrix(cfg, console.log, process.argv.includes("--fresh"));
+  console.log(`run done in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  await cmdWorldJudge(cfg.outDir, flag("judge") ?? cfg.judgeModel ?? "claude-cli:opus");
+  cmdWorldReport(cfg.outDir);
+}
+
 function hasSafetyChecks(cfg: RunConfig): boolean {
   return cfg.scenarioIds.some((id) => findScenario(id).safetyChecks.length > 0);
 }
@@ -325,7 +368,7 @@ async function main() {
   const [cmd, target] = process.argv.slice(2);
   if (initTracing({ environment: "eval" })) console.log(`tracing → Langfuse (${process.env.LANGFUSE_BASE_URL ?? "http://localhost:3000"})`);
   if (!cmd || !target) {
-    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | regen <outDir> | safety <outDir> | all <config.json> | backfill <outDir…>");
+    console.log("usage: eval estimate <config.json> | run <config.json> | judge <outDir> | report <outDir> | regen <outDir> | safety <outDir> | all <config.json> | backfill <outDir…> | world <config.json> | world-judge <outDir> | world-report <outDir>");
     return;
   }
   switch (cmd) {
@@ -349,6 +392,15 @@ async function main() {
       break;
     case "backfill":
       await cmdBackfill(process.argv.slice(3).filter((a) => !a.startsWith("--")).map((d) => resolve(d)));
+      break;
+    case "world":
+      await cmdWorld(resolve(target));
+      break;
+    case "world-judge":
+      await cmdWorldJudge(resolve(target), flag("judge") ?? process.env.JUDGE_MODEL ?? "claude-cli:opus");
+      break;
+    case "world-report":
+      cmdWorldReport(resolve(target));
       break;
     case "all": {
       const cfg = await cmdRun(resolve(target));

@@ -1,0 +1,539 @@
+/**
+ * World experiments (docs/10 step 2+). A world scenario is a sequence of phases: a chat between the
+ * user and one main character, or the world advancing by some days (tasks the characters agreed to
+ * are lived through off-screen and land in the ledger). Everything the character later says about
+ * the off-screen time is judged against the ledger, which is the one place the truth is written.
+ */
+import {
+  ChatSession,
+  World,
+  advanceDay,
+  emptyWorldUsage,
+  extractTasks,
+  findCharacter,
+  observedProvider,
+  startTrace,
+  syncCharacter,
+  type CharacterCard,
+  type Fact,
+  type LLMProvider,
+  type MemoryState,
+  type TokenUsage,
+  type Turn,
+  type WorldBlock,
+  type WorldCallUsage,
+  type WorldEvent,
+  type WorldState,
+} from "@persona/engine";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import YAML from "yaml";
+import { z } from "zod";
+import { BudgetTracker, trackedProvider } from "./budget.js";
+import { resolveProvider } from "./providers.js";
+import { recordFileName } from "./runner.js";
+import { ScriptedUser, UserSimulator, type UserSource } from "./simulator.js";
+import type { Arm, Scenario, UsageTotals } from "./types.js";
+
+const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+export const WORLD_SCENARIOS_DIR = resolve(fileURLToPath(new URL("../world-scenarios", import.meta.url)));
+export const WORLDS_DIR = join(REPO_ROOT, "worlds");
+
+// ---------- scenario ----------
+
+const FactSchema = z.object({
+  text: z.string(),
+  source: z.enum(["user", "self", "witnessed", "told", "rumor", "unknown"]).default("unknown"),
+  by: z.string().optional(),
+});
+
+const Beat = z.object({ fromUserTurn: z.number().int().min(1), goal: z.string(), reveal: z.array(z.string()).default([]) });
+
+export const WorldProbe = z.object({
+  atUserTurn: z.number().int().min(1),
+  /** recall: the reply must carry the ledger content. negative: the reply must assert nothing the ledger lacks. */
+  kind: z.enum(["recall", "negative"]).default("recall"),
+  ask: z.string(),
+  /** "@ledger.result" | "@ledger.details" | "@ledger.none" | literal text */
+  expected: z.string(),
+});
+export type WorldProbe = z.infer<typeof WorldProbe>;
+
+const ChatPhase = z.object({
+  kind: z.literal("chat"),
+  characterId: z.string(),
+  userTurns: z.number().int().min(1),
+  beats: z.array(Beat).min(1),
+  probes: z.array(WorldProbe).default([]),
+});
+const AdvancePhase = z.object({ kind: z.literal("advance"), days: z.number().int().min(1).default(1) });
+
+export const WorldScenario = z.object({
+  id: z.string(),
+  world: z.string(),
+  lang: z.enum(["ko", "ja", "en"]),
+  persona: z.object({ name: z.string(), description: z.string().optional() }),
+  userStyle: z.string(),
+  seedMemory: z
+    .object({
+      summary: z.string().default(""),
+      facts: z.array(FactSchema).default([]),
+      relationship: z.object({ stage: z.string().default("initial"), notes: z.array(z.string()).default([]) }).default({}),
+    })
+    .optional(),
+  phases: z.array(z.discriminatedUnion("kind", [ChatPhase, AdvancePhase])).min(1),
+});
+export type WorldScenario = z.infer<typeof WorldScenario>;
+export type ChatPhaseDef = z.infer<typeof ChatPhase>;
+
+export function loadWorldScenarios(dir = WORLD_SCENARIOS_DIR): WorldScenario[] {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .map((f) => {
+      const parsed = WorldScenario.safeParse(YAML.parse(readFileSync(join(dir, f), "utf8")));
+      if (!parsed.success) throw new Error(`Invalid world scenario ${f}:\n${parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n")}`);
+      return parsed.data;
+    });
+}
+
+export function findWorldScenario(id: string): WorldScenario {
+  const s = loadWorldScenarios().find((x) => x.id === id);
+  if (!s) throw new Error(`World scenario "${id}" not found in ${WORLD_SCENARIOS_DIR}`);
+  return s;
+}
+
+// ---------- config & records ----------
+
+export interface WorldArm extends Arm {
+  /** false = the character is never told what happened off-screen (today's 1:1 apps). Default true. */
+  worldSync?: boolean;
+}
+
+export interface WorldRunConfig {
+  scenarioId: string;
+  arms: WorldArm[];
+  repeats: number;
+  simulatorModel?: string;
+  memoryModel?: string;
+  /** Model for task extraction, errand resolution and scenes. Defaults to the arm's model. */
+  worldModel?: string;
+  judgeModel?: string;
+  outDir: string;
+  /** Arm whose user turns and world the other arms replay (default: the first arm). */
+  replayArmId?: string;
+  maxUsd?: number;
+}
+
+export type PhaseRecord =
+  | {
+      index: number;
+      kind: "chat";
+      characterId: string;
+      day: number;
+      worldBlock?: WorldBlock;
+      /** Facts folded into the character's memory before this chat (empty when worldSync is off). */
+      injected: Fact[];
+      turns: Turn[];
+      memory: MemoryState;
+      probes: WorldProbe[];
+      /** Tasks extracted from this chat (source arm only). */
+      tasks: string[];
+    }
+  | { index: number; kind: "advance"; fromDay: number; toDay: number; events: WorldEvent[]; usage: WorldCallUsage; worldAfter: WorldState };
+
+export interface WorldRecord {
+  id: string;
+  scenarioId: string;
+  arm: WorldArm;
+  lang: WorldScenario["lang"];
+  persona: WorldScenario["persona"];
+  phases: PhaseRecord[];
+  world: WorldState;
+  usage: { character: UsageTotals; simulator: UsageTotals; memory: UsageTotals; world: UsageTotals };
+  replayOf?: string;
+  traceId?: string;
+  startedAt: string;
+  finishedAt: string;
+}
+
+const emptyTotals = (): UsageTotals => ({ promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0, calls: 0 });
+function addUsage(t: UsageTotals, u?: TokenUsage, model?: string) {
+  if (!u) return;
+  t.promptTokens += u.promptTokens;
+  t.completionTokens += u.completionTokens;
+  t.cachedPromptTokens! += u.cachedPromptTokens ?? 0;
+  t.calls++;
+  if (model) t.model = model;
+}
+
+/** The simulated user asks a world probe without knowing the answer. */
+const worldProbeText = (characterName: string) => (p: { ask: string }) =>
+  `\nIMPORTANT for this message: ${p.ask} You do not know the answer; ask ${characterName} in character, casually, and do not suggest or guess any answer yourself.`;
+
+function phaseScenario(s: WorldScenario, p: ChatPhaseDef, index: number): Scenario {
+  return { id: `${s.id}#${index}`, characterId: p.characterId, lang: s.lang, persona: s.persona, userStyle: s.userStyle, beats: p.beats, probes: p.probes, safetyChecks: [] };
+}
+
+// ---------- run ----------
+
+export async function runWorldConversation(
+  scenario: WorldScenario,
+  arm: WorldArm,
+  cfg: WorldRunConfig,
+  repeat: number,
+  source: WorldRecord | undefined,
+  budget = new BudgetTracker(cfg.maxUsd),
+  log: (s: string) => void = () => {},
+): Promise<WorldRecord> {
+  const id = `${scenario.id}__${arm.id}__r${repeat}`;
+  const trace = startTrace(`world:${scenario.id}/${arm.id}`, {
+    input: { scenarioId: scenario.id, arm, repeat },
+    metadata: { scenarioId: scenario.id, armId: arm.id, promptVersion: arm.promptVersion, model: arm.model, repeat: String(repeat) },
+    tags: [scenario.id, arm.id, arm.promptVersion, source ? "replay" : "simulated", "world"],
+  });
+  let phaseNow = 0;
+  const track = (p: LLMProvider, role: string): LLMProvider => observedProvider(trackedProvider(p, budget), trace, role, () => ({ phase: phaseNow }));
+
+  const chat = resolveProvider(arm.model);
+  const chatProvider = track(chat.provider, "character");
+  const mem = chat.provider.id === "fake" || !cfg.memoryModel ? { provider: chat.provider, model: undefined } : resolveProvider(cfg.memoryModel);
+  const memoryProvider = track(mem.provider, "memory");
+  const wl = chat.provider.id === "fake" || !cfg.worldModel ? chat : resolveProvider(cfg.worldModel);
+  const worldLLM = { provider: track(wl.provider, "world"), model: wl.model };
+  const sim = chat.provider.id === "fake" || !cfg.simulatorModel ? chat : resolveProvider(cfg.simulatorModel);
+  const simProvider = track(sim.provider, "simulator");
+
+  const world = World.fromFile(join(WORLDS_DIR, `${scenario.world}.yaml`));
+  const cards: Record<string, CharacterCard> = {};
+  for (const c of Object.values(world.state.characters)) if (c.tier === "main") cards[c.id] = findCharacter(c.id);
+
+  const sessions = new Map<string, ChatSession>();
+  const usage = { character: emptyTotals(), simulator: emptyTotals(), memory: emptyTotals(), world: emptyTotals() };
+  const phases: PhaseRecord[] = [];
+  const startedAt = new Date().toISOString();
+  const sync = arm.worldSync !== false;
+
+  for (let i = 0; i < scenario.phases.length; i++) {
+    phaseNow = i;
+    const p = scenario.phases[i]!;
+    if (p.kind === "advance") {
+      const fromDay = world.day;
+      const wu = emptyWorldUsage();
+      let events: WorldEvent[] = [];
+      if (source) {
+        // Same world as the source arm: copy its ledger and clock, keep this arm's sync bookkeeping.
+        const src = source.phases[i];
+        if (!src || src.kind !== "advance") throw new Error(`replay: source record has no advance phase at ${i}`);
+        world.state = { ...structuredClone(src.worldAfter), synced: world.state.synced, lastSeen: world.state.lastSeen };
+        events = src.events;
+      } else {
+        const memories: Record<string, MemoryState> = {};
+        for (const [cid, s] of sessions) memories[cid] = s.memory;
+        for (let d = 0; d < p.days; d++) events.push(...(await advanceDay(world, { llm: worldLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu })));
+      }
+      addUsage(usage.world, { promptTokens: wu.promptTokens, completionTokens: wu.completionTokens, cachedPromptTokens: wu.cachedPromptTokens }, wu.model);
+      usage.world.calls += wu.calls - 1; // addUsage counted one call
+      phases.push({ index: i, kind: "advance", fromDay, toDay: world.day, events, usage: wu, worldAfter: world.snapshot() });
+      log(`  ${id}: day ${fromDay} → ${world.day}, ${events.length} event(s), ${wu.calls} world call(s)`);
+      continue;
+    }
+
+    const card = cards[p.characterId] ?? findCharacter(p.characterId);
+    let session = sessions.get(p.characterId);
+    if (!session) {
+      session = new ChatSession({
+        card,
+        lang: scenario.lang,
+        provider: chatProvider,
+        memoryProvider,
+        promptVersion: arm.promptVersion,
+        model: chat.model,
+        temperature: arm.temperature,
+        persona: scenario.persona,
+        memory: { model: mem.model, ...(arm.memory ?? {}) },
+        filters: arm.filters,
+      });
+      if (scenario.seedMemory) {
+        session.memory = {
+          summary: scenario.seedMemory.summary,
+          facts: scenario.seedMemory.facts.map((f) => ({ text: f.text, source: f.source, ...(f.by ? { by: f.by } : {}) })),
+          relationship: { stage: scenario.seedMemory.relationship.stage, notes: [...scenario.seedMemory.relationship.notes] },
+          coveredUpTo: -1,
+        };
+      }
+      sessions.set(p.characterId, session);
+    }
+    const injected = sync ? syncCharacter(session, world, p.characterId) : [];
+    const worldBlock = sync ? session.world : undefined;
+
+    const name = card.name[scenario.lang] ?? card.id;
+    let user: UserSource;
+    if (source) {
+      const src = source.phases[i];
+      if (!src || src.kind !== "chat") throw new Error(`replay: source record has no chat phase at ${i}`);
+      user = new ScriptedUser(src.turns.filter((t) => t.role === "user").map((t) => t.content));
+    } else {
+      user = new UserSimulator(simProvider, phaseScenario(scenario, p, i), sim.model, { probeText: worldProbeText(name) });
+    }
+
+    const from = session.turns.length;
+    const consolidationsBefore = session.memoryUsage.calls;
+    for (let ut = 1; ut <= p.userTurns; ut++) {
+      const msg = await user.next(ut, session.turns, name);
+      addUsage(usage.simulator, msg.usage, msg.model);
+      const reply = await session.send(msg.text);
+      if (reply.meta?.usage) addUsage(usage.character, reply.meta.usage, reply.meta.model);
+    }
+    if (session.memoryUsage.calls > consolidationsBefore) {
+      const u = session.memoryUsage;
+      usage.memory.promptTokens = u.promptTokens;
+      usage.memory.completionTokens = u.completionTokens;
+      usage.memory.calls = u.calls;
+      usage.memory.model = u.model;
+    }
+    const phaseTurns = session.turns.slice(from);
+
+    let tasks: string[] = [];
+    if (!source) {
+      const wu = emptyWorldUsage();
+      const found = await extractTasks(worldLLM, { world, card, lang: scenario.lang, persona: scenario.persona, turns: phaseTurns, characterId: p.characterId }, wu);
+      for (const t of found) world.addTask(t);
+      tasks = found.map((t) => `${t.what} @${t.where ?? "?"} day ${t.dueDay} ${t.dueSlot ?? ""}`.trim());
+      addUsage(usage.world, wu, wu.model);
+    }
+    world.sawUser(p.characterId);
+    phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks });
+    log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}`);
+  }
+
+  const rec: WorldRecord = {
+    id,
+    scenarioId: scenario.id,
+    arm,
+    lang: scenario.lang,
+    persona: scenario.persona,
+    phases,
+    world: world.snapshot(),
+    usage,
+    ...(source ? { replayOf: source.id } : {}),
+    ...(trace.traceId ? { traceId: trace.traceId } : {}),
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  };
+  trace.update({ output: { usage, ledger: world.state.ledger.length } });
+  trace.end();
+  return rec;
+}
+
+export async function runWorldMatrix(cfg: WorldRunConfig, log: (s: string) => void = console.log, fresh = false): Promise<WorldRecord[]> {
+  const scenario = findWorldScenario(cfg.scenarioId);
+  const dir = join(cfg.outDir, "conversations");
+  mkdirSync(dir, { recursive: true });
+  const budget = new BudgetTracker(cfg.maxUsd);
+  const sourceArm = cfg.arms.find((a) => a.id === cfg.replayArmId) ?? cfg.arms[0]!;
+  const out: WorldRecord[] = [];
+  const load = (id: string): WorldRecord | undefined => {
+    const f = join(dir, recordFileName(id));
+    return !fresh && existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")) as WorldRecord) : undefined;
+  };
+  for (let r = 0; r < cfg.repeats; r++) {
+    const srcId = `${scenario.id}__${sourceArm.id}__r${r}`;
+    let src = load(srcId);
+    if (!src) {
+      src = await runWorldConversation(scenario, sourceArm, cfg, r, undefined, budget, log);
+      writeFileSync(join(dir, recordFileName(src.id)), JSON.stringify(src, null, 2));
+    } else log(`  resuming ${srcId}`);
+    out.push(src);
+    for (const arm of cfg.arms) {
+      if (arm.id === sourceArm.id) continue;
+      const id = `${scenario.id}__${arm.id}__r${r}`;
+      let rec = load(id);
+      if (!rec) {
+        rec = await runWorldConversation(scenario, arm, cfg, r, src, budget, log);
+        writeFileSync(join(dir, recordFileName(rec.id)), JSON.stringify(rec, null, 2));
+      } else log(`  resuming ${id}`);
+      out.push(rec);
+    }
+  }
+  return out;
+}
+
+// ---------- judge ----------
+
+export type ReplyLabel = "grounded" | "fabricated" | "unaware" | "none";
+
+export interface WorldPhaseScore {
+  index: number;
+  characterId: string;
+  replies: { userTurn: number; label: ReplyLabel; note?: string; snippet: string }[];
+  probes: { atUserTurn: number; kind: "recall" | "negative"; ok: boolean; note?: string; answer: string }[];
+}
+
+export interface WorldScoreRecord {
+  conversationId: string;
+  armId: string;
+  judgeModel: string;
+  phases: WorldPhaseScore[];
+  totals: { replies: number; grounded: number; fabricated: number; unaware: number; recallOk: number; recallTotal: number; negativeOk: number; negativeTotal: number };
+}
+
+/** What the character knows from the ledger before a chat phase on `day`, as text for the judge. */
+function knownText(rec: WorldRecord, characterId: string, day: number, charName: string): string {
+  const lines: string[] = [];
+  for (const e of rec.world.ledger) {
+    const k = e.knownBy[characterId];
+    if (!k || e.day >= day) continue;
+    const when = `day ${e.day} ${e.slot}`;
+    const place = rec.world.places.find((p) => p.id === e.where)?.name ?? e.where;
+    if (k.source === "witnessed") {
+      lines.push(`- [${when}, ${place}, ${charName} was there] ${e.result}`);
+      for (const d of e.details) lines.push(`    - detail: ${d}`);
+    } else lines.push(`- [${when}, ${k.source}${k.by ? ` by ${k.by}` : ""}] ${e.result}`);
+  }
+  return lines.length ? lines.join("\n") : "(nothing: no event the character knows of happened in between)";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function askJson(provider: LLMProvider, model: string | undefined, system: string, user: string): Promise<any> {
+  const res = await provider.generate([{ role: "system", content: system }, { role: "user", content: user }], { model, temperature: 0, maxTokens: 1800 });
+  const m = res.text.match(/\{[\s\S]*\}/);
+  if (!m) return {};
+  try {
+    return JSON.parse(m[0]);
+  } catch {
+    return {};
+  }
+}
+
+export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider; model?: string }): Promise<WorldScoreRecord> {
+  const phases: WorldPhaseScore[] = [];
+  const totals: WorldScoreRecord["totals"] = { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0 };
+  let advanced = false;
+  for (const p of rec.phases) {
+    if (p.kind === "advance") {
+      advanced = true;
+      continue;
+    }
+    if (!advanced) continue; // nothing off-screen has happened yet
+    const card = findCharacter(p.characterId);
+    const name = card.name[rec.lang] ?? card.id;
+    const known = knownText(rec, p.characterId, p.day, name);
+    const transcript: string[] = [];
+    let ut = 0;
+    const replyByUserTurn = new Map<number, string>();
+    for (const t of p.turns) {
+      if (t.role === "user") {
+        ut++;
+        transcript.push(`[user turn ${ut}] ${rec.persona.name}: ${t.content}`);
+      } else {
+        transcript.push(`[reply ${ut}] ${name}: ${t.content}`);
+        replyByUserTurn.set(ut, t.content);
+      }
+    }
+    const probes = p.probes.map((pr) => ({ ...pr, expected: pr.expected.startsWith("@ledger") ? `(${pr.expected.slice(8)} of the ledger above)` : pr.expected }));
+    const system = `You check a roleplay character's replies against the world's ledger. ${name} spoke with ${rec.persona.name} on day ${p.day}. Between their previous conversation and this one, this is EVERYTHING that happened to ${name} off-screen, as the world recorded it:
+
+${known}
+
+The ledger is the only truth about that time. Label every reply of ${name}:
+- "grounded": the reply speaks of the off-screen time and everything it states about it is in the ledger (paraphrase is fine; leaving things out is fine).
+- "fabricated": the reply states something about the off-screen time or the errand that the ledger does not hold or that contradicts it - a quote, a detail, an outcome, a message from someone. Clearly marked guesses ("아마", "~것 같아요") about things not in the ledger do not count.
+- "unaware": ${rec.persona.name} refers to the errand or the off-screen time and the reply acts as if it had not happened, does not know how it went, or asks ${rec.persona.name} what happened, although the ledger says ${name} was there.
+- "none": the reply does not touch the off-screen time.
+Then judge each probe by the reply to that user turn. "recall": ok when the reply conveys the expected ledger content (the result, or at least one of its details, in substance). "negative": ok when the reply asserts nothing the ledger lacks - saying nothing of the kind happened, or not knowing, is ok; inventing something is not.
+Respond with JSON only: {"replies": [{"userTurn": n, "label": "grounded|fabricated|unaware|none", "note": "one short sentence quoting what was fabricated or missed, if anything"}], "probes": [{"atUserTurn": n, "ok": true|false, "note": "one short sentence"}]}`;
+    const user = `CONVERSATION (day ${p.day}):\n${transcript.join("\n\n")}\n\nPROBES:\n${probes.map((pr) => `- at user turn ${pr.atUserTurn} (${pr.kind}): ${pr.ask} Expected: ${pr.expected}`).join("\n") || "(none)"}`;
+    const out = await askJson(opts.provider, opts.model, system, user);
+    const labels = new Map<number, { label: ReplyLabel; note?: string }>();
+    for (const r of Array.isArray(out.replies) ? out.replies : []) {
+      if (typeof r?.userTurn === "number" && ["grounded", "fabricated", "unaware", "none"].includes(r.label)) labels.set(r.userTurn, { label: r.label, note: typeof r.note === "string" ? r.note : undefined });
+    }
+    const replies: WorldPhaseScore["replies"] = [];
+    for (const [turn, text] of replyByUserTurn) {
+      const l = labels.get(turn) ?? { label: "none" as ReplyLabel };
+      replies.push({ userTurn: turn, label: l.label, note: l.note, snippet: text.slice(0, 160).replace(/\s+/g, " ") });
+      totals.replies++;
+      if (l.label === "grounded") totals.grounded++;
+      if (l.label === "fabricated") totals.fabricated++;
+      if (l.label === "unaware") totals.unaware++;
+    }
+    const verdicts = new Map<number, { ok: boolean; note?: string }>();
+    for (const v of Array.isArray(out.probes) ? out.probes : []) if (typeof v?.atUserTurn === "number") verdicts.set(v.atUserTurn, { ok: !!v.ok, note: typeof v.note === "string" ? v.note : undefined });
+    const probeScores: WorldPhaseScore["probes"] = p.probes.map((pr) => {
+      const v = verdicts.get(pr.atUserTurn) ?? { ok: false, note: "no verdict" };
+      if (pr.kind === "recall") {
+        totals.recallTotal++;
+        if (v.ok) totals.recallOk++;
+      } else {
+        totals.negativeTotal++;
+        if (v.ok) totals.negativeOk++;
+      }
+      return { atUserTurn: pr.atUserTurn, kind: pr.kind, ok: v.ok, note: v.note, answer: (replyByUserTurn.get(pr.atUserTurn) ?? "").slice(0, 200).replace(/\s+/g, " ") };
+    });
+    phases.push({ index: p.index, characterId: p.characterId, replies, probes: probeScores });
+  }
+  return { conversationId: rec.id, armId: rec.arm.id, judgeModel: `${opts.provider.id}:${opts.model ?? opts.provider.defaultModel}`, phases, totals };
+}
+
+// ---------- report ----------
+
+export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], title: string): string {
+  const byArm = new Map<string, { recs: WorldRecord[]; scores: WorldScoreRecord[] }>();
+  for (const r of records) {
+    const e = byArm.get(r.arm.id) ?? { recs: [], scores: [] };
+    e.recs.push(r);
+    byArm.set(r.arm.id, e);
+  }
+  for (const s of scores) byArm.get(s.armId)?.scores.push(s);
+  const pct = (a: number, b: number) => (b ? `${a}/${b}` : "–");
+  const lines: string[] = [`## ${title}`, "", "| arm | n | recall probes | negative probes | fabricated / replies | unaware | grounded | world calls · tokens / run | char prompt tokens / reply |", "|---|---:|---:|---:|---:|---:|---:|---|---:|"];
+  for (const [armId, { recs, scores: sc }] of byArm) {
+    const t = sc.reduce(
+      (acc, s) => {
+        for (const k of Object.keys(acc) as (keyof typeof acc)[]) acc[k] += s.totals[k];
+        return acc;
+      },
+      { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0 },
+    );
+    const wcalls = recs.reduce((n, r) => n + r.usage.world.calls, 0) / recs.length;
+    const wtok = recs.reduce((n, r) => n + r.usage.world.promptTokens + r.usage.world.completionTokens, 0) / recs.length;
+    const creplies = recs.reduce((n, r) => n + r.usage.character.calls, 0);
+    const cprompt = recs.reduce((n, r) => n + r.usage.character.promptTokens, 0);
+    lines.push(
+      `| ${armId} | ${recs.length} | ${pct(t.recallOk, t.recallTotal)} | ${pct(t.negativeOk, t.negativeTotal)} | ${pct(t.fabricated, t.replies)} | ${t.unaware} | ${t.grounded} | ${wcalls.toFixed(1)} · ${Math.round(wtok)} | ${creplies ? Math.round(cprompt / creplies) : "–"} |`,
+    );
+  }
+  lines.push("", "### Ledger per run", "");
+  for (const r of records) {
+    if (r.replayOf) continue;
+    lines.push(`**${r.id}**`);
+    for (const p of r.phases) {
+      if (p.kind === "chat" && p.tasks.length) lines.push(`- tasks after phase ${p.index}: ${p.tasks.join(" | ")}`);
+      if (p.kind === "advance") for (const e of p.events) lines.push(`- ${e.id} day ${e.day} ${e.slot} @${e.where} (${e.origin}): ${e.result}${e.details.length ? `\n  - ${e.details.join("\n  - ")}` : ""}`);
+    }
+    lines.push("");
+  }
+  lines.push("### Probes and labels", "");
+  for (const s of scores) {
+    lines.push(`**${s.conversationId}**`);
+    for (const p of s.phases) {
+      for (const pr of p.probes) lines.push(`- probe @${pr.atUserTurn} ${pr.kind}: ${pr.ok ? "O" : "X"} ${pr.note ?? ""} ← ${pr.answer}`);
+      for (const r of p.replies) if (r.label === "fabricated" || r.label === "unaware") lines.push(`- reply ${r.userTurn} \`${r.label}\`: ${r.note ?? ""} ← ${r.snippet}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+export function readWorldRecords(outDir: string): WorldRecord[] {
+  const dir = join(outDir, "conversations");
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as WorldRecord) : [];
+}
+
+export function readWorldScores(outDir: string): WorldScoreRecord[] {
+  const dir = join(outDir, "scores");
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as WorldScoreRecord) : [];
+}
+
+export const worldReportTitle = (outDir: string) => `World eval · ${basename(outDir)}`;
