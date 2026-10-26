@@ -49,14 +49,17 @@ export async function compactWorldFacts(
     [
       {
         role: "system",
-        content: `You compress a character's memory. Rewrite the dated facts below as 2-5 sentences of past-tense summary in the same language as the facts, keeping every proper noun, number, weekday and who-told-whom, dropping nothing that would matter a month later. Output the summary text only.`,
+        content: `You compress a character's memory. Rewrite the dated facts below as 2-5 sentences of past-tense summary in the same language as the facts, keeping every proper noun, number, weekday and who-told-whom, dropping nothing that would matter a month later. Date each thing exactly as "day N (Weekday)" with the Latin word day and the day number (the character's clock counts days the same way: today is day ${world.day}); never a bare weekday and never a calendar-style "N일", which read as a recent date months later. Output the summary text only.`,
       },
       { role: "user", content: `EXISTING SUMMARY:\n${session.memory.summary || "(none)"}\n\nFACTS TO FOLD IN:\n${lines}` },
     ],
     { model: llm.model, temperature: 0.2, maxTokens: 500 },
   );
-  const text = res.text.trim();
+  let text = res.text.trim();
   if (!text) return { folded: 0 };
+  // The fold is labelled with its day range, so the paragraph reads as "long ago" next to NOW's "Day N".
+  const days = old.map((f) => f.day!);
+  text = `[days ${Math.min(...days)}-${Math.max(...days)}] ${text}`;
   const oldSet = new Set(old);
   session.memory = {
     ...session.memory,
