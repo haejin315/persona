@@ -196,6 +196,27 @@ describe("World + model + session", () => {
     expect(llm.calls.filter((c) => c.startsWith("You decide what happened"))).toHaveLength(1);
   });
 
+  it("a task in a slot the character spent with the user is deferred, not done", async () => {
+    const llm = fakeWorldLLM();
+    const w = World.create({ ...def, characters: [def.characters[0]!] });
+    w.addTask({ assignee: "haru", what: "책 받아 오기", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "민수" });
+    w.setClock(1, "afternoon");
+    w.recordChat("haru", "민수", "cafe");
+    expect(w.whereIs("haru", 1, "afternoon")).toBe("bookshop"); // the plan
+    const events = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card }, persona: { name: "민수" } });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.origin).toBe("catchup");
+    expect(events[0]!.result).toContain("did not go to 헌책방");
+    expect(w.state.tasks[0]).toMatchObject({ status: "pending", dueDay: 2 });
+    expect(llm.calls).toHaveLength(0);
+    // next day the errand happens
+    const later = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card }, persona: { name: "민수" } });
+    expect(later[0]!.origin).toBe("errand");
+    expect(w.state.tasks[0]!.status).toBe("done");
+    const facts = w.factsFor("haru", w.unsynced("haru"));
+    expect(facts.map((f) => f.day)).toEqual([1, 2, 2, 2]); // deferral, errand + 2 details (the chat itself is not a fact)
+  });
+
   it("a routine day costs no calls, and a task due later today stays pending", async () => {
     const llm = fakeWorldLLM();
     const w = World.create(def);

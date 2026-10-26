@@ -70,6 +70,29 @@ export class World {
     return c;
   }
 
+  /** True when the character spent that slot with the user (a `chat` ledger entry). */
+  withUser(characterId: string, day: number, slot: Slot): WorldEvent | undefined {
+    return this.state.ledger.find((e) => e.origin === "chat" && e.day === day && e.slot === slot && e.who.includes(characterId));
+  }
+
+  /** Record that the user spent a slot with a character where they are; the character's place for that slot. */
+  recordChat(characterId: string, user: string, placeId: string): WorldEvent {
+    const c = this.character(characterId);
+    return this.record({
+      day: this.day,
+      slot: this.slot,
+      where: placeId,
+      who: [characterId],
+      scope: "personal",
+      result: `${c.name} spent the ${this.slot} with ${user} at ${this.place(placeId).name}`,
+      details: [],
+      // Nobody "knows" this as a fact: the chat itself is in the character's transcript. The entry
+      // only fixes where the character was (occupancy for tasks, location for routine scenes).
+      knownBy: {},
+      origin: "chat",
+    });
+  }
+
   /** Where a character is in a slot: a due task's place wins over the routine. */
   whereIs(characterId: string, day = this.day, slot = this.slot): string | undefined {
     const task = this.state.tasks.find(

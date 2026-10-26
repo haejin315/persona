@@ -347,6 +347,30 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
   }
   for (const group of groups.values()) {
     const task: WorldTask = group.length === 1 ? group[0]! : { ...group[0]!, what: group.map((t) => t.what).join(" / ") };
+    // The user wins the slot (docs/10 T4): a character who spent it with the user did not go. The
+    // errand moves to the same slot next day and the character remembers why.
+    const chat = world.withUser(task.assignee, task.dueDay, task.dueSlot ?? "afternoon");
+    if (chat) {
+      const name = deps.cards[task.assignee]?.name[deps.lang] ?? task.assignee;
+      const placeName = task.where ? world.place(task.where).name : "the errand";
+      const due = task.dueDay;
+      for (const t of group) t.dueDay = due + 1;
+      events.push(
+        world.record({
+          day: due,
+          slot: task.dueSlot ?? "afternoon",
+          where: chat.where,
+          who: [task.assignee],
+          scope: "personal",
+          result: `${name} did not go to ${placeName} that ${task.dueSlot ?? "afternoon"}: ${deps.persona?.name ?? "the user"} was there with ${name}, so the errand (${task.what}) moved to the next day`,
+          details: [],
+          knownBy: { [task.assignee]: { source: "witnessed" } },
+          origin: "catchup",
+          // not taskId: the task stays pending
+        }),
+      );
+      continue;
+    }
     const finish = (ev: WorldEvent) => {
       for (const t of group) {
         if (t.status === "pending") t.status = "done";

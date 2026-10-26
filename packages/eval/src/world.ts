@@ -317,6 +317,10 @@ export async function runWorldConversation(
       addUsage(usage.world, wu, wu.model);
     }
     world.sawUser(p.characterId);
+    if (!source) {
+      const at = world.whereIs(p.characterId) ?? world.state.places[0]!.id;
+      world.recordChat(p.characterId, scenario.persona.name, at);
+    }
     phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks });
     log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}`);
   }
@@ -433,6 +437,14 @@ export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider
     const card = findCharacter(p.characterId);
     const name = card.name[rec.lang] ?? card.id;
     const known = knownText(rec, p.characterId, p.day, name);
+    // What the character knew apart from the ledger: seeded/remembered facts and earlier chats with
+    // the user. Without these the judge calls a detail the user said on day 1 "fabricated" (T3b).
+    const prior = p.memory.facts.filter((f) => f.source === "user" || f.source === "self" || f.source === "unknown").map((f) => `- ${f.text}`);
+    const earlier: string[] = [];
+    for (const q of rec.phases) {
+      if (q.kind !== "chat" || q.index >= p.index || q.characterId !== p.characterId) continue;
+      earlier.push(`(day ${q.day})`, ...q.turns.map((t) => `${t.role === "user" ? rec.persona.name : name}: ${t.content}`));
+    }
     const transcript: string[] = [];
     let ut = 0;
     const replyByUserTurn = new Map<number, string>();
@@ -450,7 +462,10 @@ export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider
 
 ${known}
 
-The ledger is the only truth about that time. Label every reply of ${name}:
+${name} also already knew (from before, not off-screen):
+${prior.length ? prior.join("\n") : "(nothing recorded)"}
+${earlier.length ? `\nEarlier conversations between ${name} and ${rec.persona.name} (what was said there is known to both and is not fabrication):\n${earlier.join("\n")}\n` : ""}
+The ledger is the only truth about the off-screen time; the facts and conversations above are what else ${name} legitimately knows. Label every reply of ${name}:
 - "grounded": the reply speaks of the off-screen time and everything it states about it is in the ledger (paraphrase is fine; leaving things out is fine).
 - "fabricated": the reply states something about the off-screen time or the errand that the ledger does not hold or that contradicts it - a quote, a detail, an outcome, a message from someone. Clearly marked guesses ("아마", "~것 같아요") about things not in the ledger do not count.
 - "unaware": ${rec.persona.name} refers to the errand or the off-screen time and the reply acts as if it had not happened, does not know how it went, or asks ${rec.persona.name} what happened, although the ledger says ${name} was there.
