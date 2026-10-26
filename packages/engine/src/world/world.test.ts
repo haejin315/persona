@@ -237,6 +237,14 @@ describe("World + model + session", () => {
     const later = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card }, persona: { name: "민수" } });
     expect(later[0]!.origin).toBe("errand");
     expect(w.state.tasks[0]!.status).toBe("done");
+    // a slot spent with the user has no routine scene either
+    const w2 = World.create({ ...def, places: [...def.places, { id: "market", name: "시장" }], characters: [...def.characters, { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "home" } }] });
+    w2.record({ day: 1, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "x", details: ["y"], knownBy: { haru: { source: "witnessed" } }, origin: "errand" });
+    w2.setClock(1, "afternoon");
+    w2.recordChat("haru", "민수", "cafe");
+    const imoCard = { ...card, id: "imo", name: { ko: "이모", ja: "おば", en: "Aunt" } };
+    const none = await advanceDay(w2, { llm: { provider: llm }, lang: "ko", cards: { haru: card, yoon: yoonCard, imo: imoCard } });
+    expect(none).toEqual([]);
     const facts = w.factsFor("haru", w.unsynced("haru"));
     expect(facts.map((f) => f.day)).toEqual([1, 2, 2, 2]); // deferral, errand + 2 details (the chat itself is not a fact)
   });

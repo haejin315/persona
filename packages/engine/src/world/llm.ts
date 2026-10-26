@@ -440,6 +440,7 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
         const a = mains[i]!;
         const b = mains[j]!;
         if (met.has(pairKey(a, b))) continue;
+        if (world.withUser(a, day, slot) || world.withUser(b, day, slot)) continue; // the user wins the slot
         const where = locationOn(a, slot);
         if (!where || locationOn(b, slot) !== where) continue;
         if (!hasNews(world, a, b)) continue;
