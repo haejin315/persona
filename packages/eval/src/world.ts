@@ -8,6 +8,8 @@ import {
   ChatSession,
   World,
   advanceDay,
+  catchUp,
+  compactWorldFacts,
   emptyWorldUsage,
   extractTasks,
   findCharacter,
@@ -141,6 +143,14 @@ export interface WorldRunConfig {
   worldModel?: string;
   /** Model that checks a decided event against its task (default: worldModel). A small one is enough. */
   verifierModel?: string;
+  /** The world's own events per day while the user is away (default 0: nothing happens without tasks). */
+  eventsPerDay?: number;
+  /** For an advance longer than `recentDays`, older days are decided in spans of `spanDays` with at most `eventsPerSpan` events. */
+  recentDays?: number;
+  spanDays?: number;
+  eventsPerSpan?: number;
+  /** Fold ledger facts older than 7 days into the summary when a character carries more than this many (default 25). */
+  maxFacts?: number;
   judgeModel?: string;
   outDir: string;
   /** Arm whose user turns and world the other arms replay (default: the first arm). */
@@ -157,13 +167,15 @@ export type PhaseRecord =
       worldBlock?: WorldBlock;
       /** Facts folded into the character's memory before this chat (empty when worldSync is off). */
       injected: Fact[];
+      /** Dated facts folded into the summary before this chat (long gaps). */
+      compacted?: number;
       turns: Turn[];
       memory: MemoryState;
       probes: WorldProbe[];
       /** Tasks extracted from this chat (source arm only). */
       tasks: string[];
     }
-  | { index: number; kind: "advance"; fromDay: number; toDay: number; events: WorldEvent[]; usage: WorldCallUsage; worldAfter: WorldState }
+  | { index: number; kind: "advance"; fromDay: number; toDay: number; events: WorldEvent[]; usage: WorldCallUsage; worldAfter: WorldState; dayByDay?: number; inSpans?: number }
   | { index: number; kind: "event"; day: number; event: WorldEvent };
 
 export interface WorldRecord {
@@ -259,6 +271,7 @@ export async function runWorldConversation(
       const fromDay = world.day;
       const wu = emptyWorldUsage();
       let events: WorldEvent[] = [];
+      let tiers: { dayByDay?: number; inSpans?: number } = {};
       if (source) {
         // Same world as the source arm: copy its ledger and clock, keep this arm's sync bookkeeping.
         const src = source.phases[i];
@@ -268,12 +281,20 @@ export async function runWorldConversation(
       } else {
         const memories: Record<string, MemoryState> = {};
         for (const [cid, s] of sessions) memories[cid] = s.memory;
-        for (let d = 0; d < p.days; d++) events.push(...(await advanceDay(world, { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu })));
+        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan };
+        if (p.days > (cfg.recentDays ?? 7)) {
+          const r = await catchUp(world, { ...deps, recentDays: cfg.recentDays, spanDays: cfg.spanDays }, p.days);
+          events.push(...r.events);
+          tiers = { dayByDay: r.dayByDay, inSpans: r.inSpans };
+        } else {
+          for (let d = 0; d < p.days; d++) events.push(...(await advanceDay(world, deps)));
+          tiers = { dayByDay: p.days, inSpans: 0 };
+        }
       }
       addUsage(usage.world, { promptTokens: wu.promptTokens, completionTokens: wu.completionTokens, cachedPromptTokens: wu.cachedPromptTokens }, wu.model);
       usage.world.calls += wu.calls - 1; // addUsage counted one call
-      phases.push({ index: i, kind: "advance", fromDay, toDay: world.day, events, usage: wu, worldAfter: world.snapshot() });
-      log(`  ${id}: day ${fromDay} → ${world.day}, ${events.length} event(s), ${wu.calls} world call(s)`);
+      phases.push({ index: i, kind: "advance", fromDay, toDay: world.day, events, usage: wu, worldAfter: world.snapshot(), ...tiers });
+      log(`  ${id}: day ${fromDay} → ${world.day}, ${events.length} event(s), ${wu.calls} world call(s)${tiers.inSpans ? ` (${tiers.inSpans} days in spans, ${tiers.dayByDay} day by day)` : ""}`);
       continue;
     }
 
@@ -305,6 +326,12 @@ export async function runWorldConversation(
       sessions.set(p.characterId, session);
     }
     const injected = sync ? syncCharacter(session, world, p.characterId) : [];
+    let compacted = 0;
+    if (sync) {
+      const c = await compactWorldFacts(session, world, { provider: memoryProvider, model: mem.model }, { maxFacts: cfg.maxFacts });
+      compacted = c.folded;
+      if (c.usage) addUsage(usage.memory, c.usage, c.usage.model);
+    }
     const worldBlock = sync ? session.world : undefined;
 
     const name = card.name[scenario.lang] ?? card.id;
@@ -349,8 +376,8 @@ export async function runWorldConversation(
       const at = world.character(p.characterId).routine[world.slot] ?? world.whereIs(p.characterId) ?? world.state.places[0]!.id;
       world.recordChat(p.characterId, scenario.persona.name, at);
     }
-    phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks });
-    log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}`);
+    phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, ...(compacted ? { compacted } : {}), turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks });
+    log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${compacted ? `, ${compacted} folded into the summary` : ""}${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}`);
   }
 
   const rec: WorldRecord = {
@@ -569,7 +596,10 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
     for (const p of r.phases) {
       if (p.kind === "chat" && p.tasks.length) lines.push(`- tasks after phase ${p.index}: ${p.tasks.join(" | ")}`);
       if (p.kind === "event") lines.push(`- ${p.event.id} day ${p.event.day} ${p.event.slot} @${p.event.where} (scripted): ${p.event.result}${p.event.effects ? ` → ${JSON.stringify(p.event.effects)}` : ""}`);
-      if (p.kind === "advance") for (const e of p.events) lines.push(`- ${e.id} day ${e.day} ${e.slot} @${e.where} (${e.origin}): ${e.result}${e.details.length ? `\n  - ${e.details.join("\n  - ")}` : ""}`);
+      if (p.kind === "advance") {
+        if (p.inSpans) lines.push(`- advance day ${p.fromDay} → ${p.toDay}: ${p.inSpans} days in spans, ${p.dayByDay} day by day, ${p.usage.calls} world calls`);
+        for (const e of p.events) lines.push(`- ${e.id} day ${e.day} ${e.slot} @${e.where} (${e.origin}): ${e.result}${e.details.length ? `\n  - ${e.details.join("\n  - ")}` : ""}`);
+      }
     }
     lines.push("");
   }

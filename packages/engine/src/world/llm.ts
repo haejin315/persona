@@ -256,6 +256,142 @@ export async function verifyEvent(
   return { ok: parsed.ok !== false && problems.length === 0, problems };
 }
 
+/** Shared context for the world's own events: places with their current state, who is where. */
+function worldSheet(world: World, deps: Pick<AdvanceDeps, "cards" | "lang">): string {
+  const chars = Object.values(world.state.characters)
+    .map((c) => {
+      const card = deps.cards[c.id];
+      const who = card ? `${card.identity.role} ${card.identity.personality.slice(0, 3).join(", ")}` : (c.sketch ?? "");
+      const routine = SLOTS.map((s) => `${s}: ${c.routine[s] ? world.place(c.routine[s]!).name : "-"}`).join(", ");
+      return `- ${c.id} (${c.name}, ${c.tier}): ${who}. Usually ${routine}.`;
+    })
+    .join("\n");
+  const recent = world.state.ledger
+    .filter((e) => e.origin !== "chat")
+    .slice(-8)
+    .map((e) => `- day ${e.day} ${e.slot} @${e.where}: ${e.result}`)
+    .join("\n");
+  return `# PLACES (id: name)\n${placesList(world)}\n\n# PEOPLE\n${chars}\n\n# RECENTLY (newest last)\n${recent || "(nothing yet)"}`;
+}
+
+function parseGenerated(world: World, parsed: unknown, dayDefault: number, maxEvents: number, origin: "world" | "span"): Omit<WorldEvent, "id">[] {
+  const list: unknown[] = Array.isArray((parsed as { events?: unknown })?.events) ? ((parsed as { events: unknown[] }).events) : [];
+  const out: Omit<WorldEvent, "id">[] = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const where = typeof o.where === "string" && world.state.places.some((p) => p.id === o.where) ? o.where : undefined;
+    if (!where || typeof o.result !== "string" || !o.result.trim()) continue;
+    const slot = SLOTS.includes(o.slot as Slot) ? (o.slot as Slot) : "afternoon";
+    const day = typeof o.day === "number" ? Math.floor(o.day) : dayDefault;
+    const who = strs(o.who).filter((id) => world.state.characters[id]);
+    const scope = o.scope === "regional" || o.scope === "world" ? o.scope : "personal";
+    const knownBy: WorldEvent["knownBy"] = {};
+    for (const id of who) knownBy[id] = { source: "witnessed" };
+    const effects: Record<string, string | null> = {};
+    if (o.effects && typeof o.effects === "object") {
+      for (const [pid, cond] of Object.entries(o.effects as Record<string, unknown>)) {
+        if (!world.state.places.some((p) => p.id === pid)) continue;
+        if (cond === null || (typeof cond === "string" && /^(null|none|usual|back to usual|-)?$/i.test(cond.trim()))) effects[pid] = null;
+        else if (typeof cond === "string") effects[pid] = cond.trim();
+      }
+    }
+    out.push({ day, slot, where, who, scope, result: o.result.trim(), details: strs(o.details).slice(0, 3), knownBy, origin, ...(Object.keys(effects).length ? { effects } : {}) });
+    if (out.length >= maxEvents) break;
+  }
+  return out;
+}
+
+/**
+ * The world's own day (docs/10 T6): one call proposes up to K small events for `day`, consistent
+ * with the places' current conditions and continuing what is already in the ledger. A quiet day
+ * is allowed and costs only this call. Characters present become witnesses.
+ */
+export async function generateDay(world: World, deps: AdvanceDeps, day: number, usage: WorldCallUsage): Promise<Omit<WorldEvent, "id">[]> {
+  const k = deps.eventsPerDay ?? 0;
+  if (k <= 0) return [];
+  const system = [
+    `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Decide what, if anything, happened on day ${day} (${world.weekdayOf(day)}) that is worth remembering. Nothing dramatic: deliveries, weather, a shop closing early, a regular not showing up, a repair finished, a small favour. Continue threads already in RECENTLY (a closed place reopens when it said it would; set its condition back with null). Respect each place's RIGHT NOW condition.`,
+    worldSheet(world, deps),
+    deps.persona ? `# THE USER\n${deps.persona.name} is away and cannot appear in these events.` : "",
+    `Output JSON only: {"events": [{"slot": "morning|afternoon|evening|night", "where": "<place id>", "who": ["<character ids who were there>"], "scope": "personal|regional", "result": "ONE sentence, past tense, dated by weekday or day number (never 어제/오늘/내일), in ${LANG_NAME[deps.lang]}", "details": ["0-3 concrete things a witness would remember"], "effects": {"<place id>": "new condition text, or null when back to usual"}}]}. At most ${k} event(s); an empty list is a fine answer for an ordinary day.`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const res = await deps.llm.provider.generate([{ role: "system", content: system }, { role: "user", content: `Day ${day}.` }], { model: deps.llm.model, temperature: 0.8, maxTokens: 700 });
+  add(usage, res);
+  return parseGenerated(world, safeJson(res.text), day, k, "world");
+}
+
+/**
+ * A compressed stretch of days (docs/10 "결정은 즉시, 장면은 나중에"): one call decides the few
+ * events of a whole span, each dated. Used for the older part of a long gap so a six-month absence
+ * is a handful of calls, not 180.
+ */
+export async function generateSpan(world: World, deps: AdvanceDeps, from: number, to: number, usage: WorldCallUsage): Promise<Omit<WorldEvent, "id">[]> {
+  const k = deps.eventsPerSpan ?? 3;
+  const system = [
+    `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Days ${from} to ${to} (${world.weekdayOf(from)} to ${world.weekdayOf(to)}, ${to - from + 1} days) pass with nobody watching. Decide the few things worth remembering from that whole stretch. Nothing dramatic; the kind of change a regular notices after a month away: a menu changed, a shop closed for a week and reopened, someone took a trip, a repair, a new regular. Continue threads in RECENTLY and close them when they would close (set a condition back with null). Respect each place's RIGHT NOW condition.`,
+    worldSheet(world, deps),
+    deps.persona ? `# THE USER\n${deps.persona.name} is away and cannot appear in these events.` : "",
+    `Output JSON only: {"events": [{"day": <${from}..${to}>, "slot": "morning|afternoon|evening|night", "where": "<place id>", "who": ["<character ids who were there>"], "scope": "personal|regional", "result": "ONE sentence, past tense, dated by weekday or day number, in ${LANG_NAME[deps.lang]}", "details": ["0-3 concrete things a witness would remember"], "effects": {"<place id>": "new condition text, or null when back to usual"}}]}. At most ${k} events for the whole span, in day order.`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const res = await deps.llm.provider.generate([{ role: "system", content: system }, { role: "user", content: `Days ${from}-${to}.` }], { model: deps.llm.model, temperature: 0.8, maxTokens: 900 });
+  add(usage, res);
+  return parseGenerated(world, safeJson(res.text), from, k, "span").map((e) => ({ ...e, day: Math.min(Math.max(e.day, from), to) }));
+}
+
+export interface CatchUpResult {
+  events: WorldEvent[];
+  /** Days lived one by one (with scenes), days folded into spans. */
+  dayByDay: number;
+  inSpans: number;
+}
+
+/**
+ * Move the world forward `days` days while the user is away. The most recent `recentDays` are
+ * lived day by day (tasks, routine scenes, the world's own events); everything before that is
+ * decided in spans of `spanDays`, oldest first, so cost grows with the number of spans, not days.
+ */
+export async function catchUp(world: World, deps: AdvanceDeps & { recentDays?: number; spanDays?: number }, days: number): Promise<CatchUpResult> {
+  const usage = deps.usage ?? emptyWorldUsage();
+  const recent = Math.max(0, deps.recentDays ?? 7);
+  const spanDays = Math.max(1, deps.spanDays ?? 30);
+  const events: WorldEvent[] = [];
+  const first = world.day; // the day that is ending now
+  const spanUntil = first + days - recent - 1; // last day decided in spans
+  let d = first;
+  let inSpans = 0;
+  while (d <= spanUntil) {
+    const to = Math.min(d + spanDays - 1, spanUntil);
+    for (const e of await generateSpan(world, deps, d, to, usage)) events.push(world.record(e));
+    // tasks due in the span still resolve (they are rare while the user is away)
+    for (let x = d; x <= to; x++) {
+      world.setClock(x, "night");
+      for (const t of world.dueTasks(x)) {
+        const slot = t.dueSlot ?? "afternoon";
+        const where = t.where ?? world.whereIs(t.assignee, t.dueDay, slot);
+        const card = deps.cards[t.assignee];
+        if (!card) continue;
+        const ev = world.record(await resolveTask(deps.llm, { world, card, lang: deps.lang, task: t, memory: knowledgeOf(world, t.assignee, deps.memories) }, usage));
+        events.push(ev);
+        void where;
+      }
+    }
+    inSpans += to - d + 1;
+    d = to + 1;
+  }
+  world.setClock(d, "morning");
+  let dayByDay = 0;
+  while (world.day < first + days) {
+    events.push(...(await advanceDay(world, { ...deps, usage })));
+    dayByDay++;
+  }
+  return { events, dayByDay, inSpans };
+}
+
 export interface AdvanceDeps {
   llm: WorldLLM;
   /** Model for verifyEvent (default: `llm`). A small model is enough. */
@@ -268,6 +404,10 @@ export interface AdvanceDeps {
   usage?: WorldCallUsage;
   /** Routine scenes per day between co-located main characters who have news for each other (default 1; 0 = off). */
   scenesPerDay?: number;
+  /** The world's own events per day (generateDay), default 0 = the world only moves through tasks. */
+  eventsPerDay?: number;
+  /** Events per compressed span (generateSpan), default 3. */
+  eventsPerSpan?: number;
 }
 
 /** What a character knows: live memory facts plus everything the ledger says reached them. */
@@ -350,6 +490,9 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
   const events: WorldEvent[] = [];
   const met = new Set<string>();
   const pairKey = (a: string, b: string) => [a, b].sort().join("+");
+
+  // The world's own events for the day that ended (none unless eventsPerDay > 0).
+  for (const e of await generateDay(world, deps, day, usage)) events.push(world.record(e));
 
   // One outing per (character, place, slot): two errands at the same shop are one visit, not two
   // scenes in the same hour (T3 first run: the aunt's book and the user's book became two scenes).

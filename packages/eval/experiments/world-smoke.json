@@ -1,10 +1,24 @@
 {
-  "scenarioId": "t5-state",
+  "scenarioId": "t6-gap-180",
   "arms": [
-    { "id": "world/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": true },
-    { "id": "no-world/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": false }
+    {
+      "id": "world/fake",
+      "promptVersion": "v13-structured",
+      "model": "fake",
+      "worldSync": true
+    },
+    {
+      "id": "no-world/fake",
+      "promptVersion": "v13-structured",
+      "model": "fake",
+      "worldSync": false
+    }
   ],
   "repeats": 1,
   "judgeModel": "fake",
-  "outDir": "eval-results/world-smoke"
+  "outDir": "eval-results/world-smoke",
+  "eventsPerDay": 1,
+  "recentDays": 7,
+  "spanDays": 30,
+  "eventsPerSpan": 3
 }

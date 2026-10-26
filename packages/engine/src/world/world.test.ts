@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findCharacter } from "../characters.js";
 import type { LLMProvider } from "../providers/types.js";
 import { ChatSession } from "../session.js";
-import { advanceDay, extractTasks } from "./llm.js";
+import { advanceDay, catchUp, extractTasks } from "./llm.js";
 import { syncCharacter } from "./sync.js";
 import { World, type WorldFile } from "./world.js";
 
@@ -38,6 +38,12 @@ const fakeWorldLLM = (): LLMProvider & { calls: string[] } => {
           details: ["윤이 책을 신문지에 싸 주었다", "둘째 권 표지가 조금 바랬다"],
           told: { haru: ["윤은 다음 주에 가게를 사흘 쉰다고 했다"], yoon: ["하루는 민수가 어릴 때 만화를 그렸다고 전했다"] },
         });
+      } else if (sys.includes("Decide what, if anything, happened on day")) {
+        const day = Number(sys.match(/happened on day (\d+)/)?.[1] ?? 0);
+        text = JSON.stringify({ events: day % 2 === 0 ? [{ slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: `day ${day}: 원두가 바뀌었다`, details: ["새 원두는 신맛이 덜하다"] }] : [] });
+      } else if (sys.includes("pass with nobody watching")) {
+        const m = sys.match(/Days (\d+) to (\d+)/)!;
+        text = JSON.stringify({ events: [{ day: Number(m[1]) + 1, slot: "afternoon", where: "bookshop", who: ["yoon"], scope: "regional", result: `days ${m[1]}-${m[2]}: 책다락이 일주일 쉬었다 열었다`, details: [], effects: { bookshop: null } }] });
       } else if (sys.includes("check a story event")) {
         text = JSON.stringify({ ok: true, problems: [] });
       } else if (sys.includes("did an errand")) {
@@ -269,6 +275,26 @@ describe("World + model + session", () => {
     expect(next.map((e) => [e.day, e.slot])).toEqual([[2, "afternoon"]]);
     const facts = w.factsFor("haru", w.unsynced("haru"));
     expect(facts.map((f) => f.day)).toEqual([1, 2, 2, 2]); // deferral, errand + 2 details (the chat itself is not a fact)
+  });
+
+  it("the world's own events appear only when eventsPerDay > 0, and a long gap is spans plus recent days", async () => {
+    const llm = fakeWorldLLM();
+    const w = World.create({ ...def, characters: [def.characters[0]!, { ...def.characters[1]!, routine: { ...def.characters[1]!.routine, night: "bookshop" } }] });
+    const cards = { haru: card, yoon: yoonCard };
+    expect(await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards })).toEqual([]); // default: off
+    const one = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards, eventsPerDay: 1 }); // day 2 ends
+    expect(one.map((e) => e.origin)).toEqual(["world"]);
+    expect(one[0]!.knownBy).toEqual({ haru: { source: "witnessed" } });
+    llm.calls.length = 0;
+    // 40 days away from day 3: days 3..35 in two spans (30 + 3), days 36..42 day by day
+    const r = await catchUp(w, { llm: { provider: llm }, lang: "ko", cards, eventsPerDay: 1, recentDays: 7, spanDays: 30 }, 40);
+    expect(w.day).toBe(43);
+    expect(r.inSpans).toBe(33);
+    expect(r.dayByDay).toBe(7);
+    const spanCalls = llm.calls.filter((c) => c.startsWith("You are the world of a quiet") ).length;
+    expect(spanCalls).toBe(2 + 7); // 2 spans + 7 days
+    expect(r.events.filter((e) => e.origin === "span")).toHaveLength(2);
+    expect(r.events.filter((e) => e.origin === "span").every((e) => e.day >= 3 && e.day <= 35)).toBe(true);
   });
 
   it("a routine day costs no calls, and a task due later today stays pending", async () => {

@@ -1,0 +1,96 @@
+# T6 · 긴 공백 (docs/10 test ladder), 7 days. The user tells Haru on day 1 that he leaves for a
+# week-long business trip tomorrow, asks her to fetch his book while he is away, and comes back.
+# While he is away the world runs on its own (one event a day at most, routine scenes when there
+# is news). On return: does Haru know how long it has been, what happened to the errand, and what
+# changed in the neighbourhood - from the ledger only. Then Yoon's account of the same days.
+# The same scenario exists for 30 and 180 days (t6-gap-30, t6-gap-180); only the gap differs.
+id: t6-gap-180
+world: haru-town
+lang: ko
+persona:
+  name: 민수
+  description: 28살, 작은 디자인 회사에 올해 들어온 신입. 몇 달째 아침마다 카페 '모퉁이'에 오는 단골. 하루와는 서로 이름을 알고 가벼운 농담을 주고받는 사이.
+userStyle: >
+  존댓말. 짧게 1~2문장으로 말하고, 지문은 세 번에 한 번 정도 짧게 쓴다. 감정보다 상황을 말한다.
+  하루가 전에 한 말을 가끔 되짚어 말한다.
+seedMemory:
+  haru:
+    summary: >
+      민수는 몇 달 동안 매일 아침 7시쯤 와서 아메리카노를 마시는 단골이다. 서로 이름을 알게 된 뒤로 주문 외의 대화를 조금씩 주고받는다.
+    facts:
+      - { text: "민수의 이름은 민수다", source: user }
+      - { text: "민수는 디자인 회사에 올해 들어온 신입이다", source: user }
+      - { text: "민수는 고양이 보리를 키운다", source: user }
+      - { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: user }
+    relationship:
+      stage: friendly
+      notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
+  yoon:
+    summary: >
+      민수는 몇 번 들른 손님이다. 지난주에 옛 만화책 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다.
+      하루는 카페 '모퉁이'의 바리스타로 이모 선영이 주문한 책을 받아 가려고 가끔 들른다.
+    facts:
+      - { text: "민수는 지난주에 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다", source: user }
+      - { text: "하루는 카페 '모퉁이'의 바리스타이고 이모 선영이 주문한 책을 받아 가려고 가끔 들른다", source: witnessed }
+    relationship:
+      stage: acquaintance
+      notes: ["책을 찾아 달라고 부탁한 손님"]
+phases:
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 5
+    beats:
+      - fromUserTurn: 1
+        goal: 평소처럼 아침 커피를 주문하며 인사한다. 내일부터 반년 동안 해외 파견이라 당분간 못 온다고 말한다.
+      - fromUserTurn: 2
+        goal: >
+          심부름을 부탁한다. 출장 중 언제든 책다락에 들를 일이 있으면, 민수가 지난주에 사장님께 찾아 달라고 부탁해 둔 옛 만화책 『달빛 고양이』 단행본(90년대, 두 권짜리)이
+          들어왔는지 물어보고, 들어왔으면 대신 받아 맡아 달라고. 책값은 지난주에 미리 냈다고 말한다. 승낙하면 고맙다고 하고, 다녀오겠다고 인사한다.
+        reveal:
+          - 민수는 지난주에 책다락 사장님께 『달빛 고양이』 단행본(두 권)을 찾아 달라고 부탁하고 책값을 미리 냈다
+          - 민수는 내일부터 반년 동안 해외 파견을 간다
+  - kind: advance
+    days: 180
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 6
+    beats:
+      - fromUserTurn: 1
+        goal: 출장에서 돌아온 첫 아침. 인사하면서 얼마 만인지 묻는다("저 며칠 만에 온 거죠?"). 날짜는 자기도 헷갈린다는 투로.
+      - fromUserTurn: 2
+        goal: 자기가 없는 동안 책다락 심부름은 어떻게 됐는지 묻는다. 하루가 말한 결과에 대해 세부를 캐묻되 답을 암시하지 않는다.
+      - fromUserTurn: 4
+        goal: 자기가 없는 동안 동네나 가게에 무슨 일이 있었는지 묻는다. 그 뒤 출근한다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 며칠 만에 온 건지 묻는다
+        expected: "@world (the gap in days; the user left the day after day 1 and returns on day 181, so about six months / 180 days since they last spoke)"
+      - atUserTurn: 2
+        kind: recall
+        ask: 책다락 심부름이 어떻게 됐는지 묻는다
+        expected: "@ledger (the errand's outcome as recorded, or that it has not happened yet)"
+      - atUserTurn: 4
+        kind: negative
+        ask: 그동안 동네나 가게에 무슨 일이 있었는지 묻는다
+        expected: "@ledger (only events the ledger says Haru witnessed or was told; nothing invented)"
+  - kind: chat
+    characterId: yoon
+    slot: afternoon
+    userTurns: 4
+    beats:
+      - fromUserTurn: 1
+        goal: 같은 날 오후, 책다락에 들러 인사한다. 출장 다녀왔다고 하고, 자기 책은 어떻게 됐는지, 하루 씨가 들렀는지 묻는다.
+      - fromUserTurn: 3
+        goal: 그동안 가게에 별일 없었는지 묻고 간다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 자기 책은 어떻게 됐는지, 하루 씨가 들렀는지 묻는다
+        expected: "@ledger (what Yoon witnessed about the book and Haru's visit, consistent with Haru's account)"
+      - atUserTurn: 3
+        kind: negative
+        ask: 그동안 가게에 별일 없었는지 묻는다
+        expected: "@ledger (only what the ledger holds for the bookshop in those days)"
