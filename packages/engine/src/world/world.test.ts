@@ -79,8 +79,9 @@ describe("World (code only)", () => {
     expect(t.eventId).toBe(ev.id);
     const haru = w.factsFor("haru", w.unsynced("haru"));
     expect(haru.map((f) => f.source)).toEqual(["witnessed", "witnessed", "told"]);
-    expect(haru[0]!.text).toContain("yesterday");
-    expect(haru[2]).toMatchObject({ by: "윤" });
+    expect(haru[0]!.text).toMatch(/^afternoon, 헌책방/);
+    expect(haru[0]!.day).toBe(2);
+    expect(haru[2]).toMatchObject({ by: "윤", day: 2 });
     // yoon knows the meeting but was not told the second line
     expect(w.factsFor("yoon", w.unsynced("yoon"))).toHaveLength(2);
     w.markSynced("haru");
@@ -115,11 +116,17 @@ describe("World + model + session", () => {
     expect(added).toHaveLength(3); // result + 2 details
     const facts = session.memory.facts;
     expect(facts.every((f) => f.source === "witnessed")).toBe(true);
-    expect(facts[0]!.text).toMatch(/^yesterday, afternoon, 헌책방/);
+    expect(facts[0]!.text).toMatch(/^afternoon, 헌책방/);
     const after = session.buildMessages()[0]!.content;
     expect(after).toContain("# NOW\nDay 2, morning. You are at 카페");
     expect(after).toContain("A day has passed since you last spoke with 민수");
-    expect(after).toContain("책을 받아 왔다");
+    expect(after).toContain("- [day 1, yesterday] afternoon, 헌책방 '책다락': 하루가 책다락에서 민수의 책을 받아 왔다.");
+    // the label follows the clock: two days later the same fact reads "2 days ago"
+    w.setClock(3);
+    session.world = w.blockFor("haru");
+    expect(session.buildMessages()[0]!.content).toContain("[day 1, 2 days ago] afternoon");
+    w.setClock(2);
+    session.world = w.blockFor("haru");
     // the next user message carries the day boundary into the transcript
     await session.send('"어제 다녀오셨어요?"');
     const msgs = session.buildMessages();
@@ -175,6 +182,18 @@ describe("World + model + session", () => {
     expect(w.factsFor("imo", w.unsynced("imo")).some((f) => f.source === "witnessed")).toBe(true);
     // haru and imo share the cafe in the afternoon but the cap (1) was spent
     expect(llm.calls.filter((c) => c.startsWith("You write what happened"))).toHaveLength(2);
+  });
+
+  it("two errands at the same place and slot are one outing", async () => {
+    const llm = fakeWorldLLM();
+    const w = World.create({ ...def, characters: [def.characters[0]!] });
+    w.addTask({ assignee: "haru", what: "이모 책", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "이모" });
+    w.addTask({ assignee: "haru", what: "민수 책", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "민수" });
+    const events = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card } });
+    expect(events).toHaveLength(1);
+    expect(w.state.tasks.map((t) => t.status)).toEqual(["done", "done"]);
+    expect(w.state.tasks.map((t) => t.eventId)).toEqual([events[0]!.id, events[0]!.id]);
+    expect(llm.calls.filter((c) => c.startsWith("You decide what happened"))).toHaveLength(1);
   });
 
   it("a routine day costs no calls, and a task due later today stays pending", async () => {

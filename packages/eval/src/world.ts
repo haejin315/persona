@@ -46,6 +46,8 @@ const FactSchema = z.object({
   text: z.string(),
   source: z.enum(["user", "self", "witnessed", "told", "rumor", "unknown"]).default("unknown"),
   by: z.string().optional(),
+  /** World day the fact refers to; rendered relative to today in the prompt. Never write "today" into a fact. */
+  day: z.number().int().optional(),
 });
 
 const Beat = z.object({ fromUserTurn: z.number().int().min(1), goal: z.string(), reveal: z.array(z.string()).default([]) });
@@ -269,7 +271,7 @@ export async function runWorldConversation(
       if (seed) {
         session.memory = {
           summary: seed.summary,
-          facts: seed.facts.map((f) => ({ text: f.text, source: f.source, ...(f.by ? { by: f.by } : {}) })),
+          facts: seed.facts.map((f) => ({ text: f.text, source: f.source, ...(f.by ? { by: f.by } : {}), ...(f.day !== undefined ? { day: f.day } : {}) })),
           relationship: { stage: seed.relationship.stage, notes: [...seed.relationship.notes] },
           coveredUpTo: -1,
         };

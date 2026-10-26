@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import YAML from "yaml";
-import type { Fact } from "../types.js";
+import { relativeDay, type Fact } from "../types.js";
 import { SLOTS, type Slot, type WorldBlock, type WorldCharacter, type WorldEvent, type WorldPlace, type WorldState, type WorldTask } from "./types.js";
 
 export interface WorldFile {
@@ -134,8 +134,8 @@ export class World {
     const out: Fact[] = [];
     for (const e of events) {
       const k = e.knownBy[characterId]!;
-      const src = { source: k.source, ...(k.by ? { by: k.by } : {}) } as const;
-      out.push({ text: `${this.dayLabel(e.day)}, ${e.slot}, ${this.place(e.where).name}: ${e.result}`, ...src });
+      const src = { source: k.source, ...(k.by ? { by: k.by } : {}), day: e.day } as const;
+      out.push({ text: `${e.slot}, ${this.place(e.where).name}: ${e.result}`, ...src });
       // A witness remembers the details; someone who was told gets the result only.
       if (k.source === "witnessed") for (const d of e.details) out.push({ text: d, ...src });
     }
@@ -144,11 +144,7 @@ export class World {
 
   /** A day relative to today, in the prompt's English (the character answers in the card's language). */
   dayLabel(day: number): string {
-    const diff = this.day - day;
-    if (diff === 0) return "today";
-    if (diff === 1) return "yesterday";
-    if (diff > 1) return `${diff} days ago`;
-    return diff === -1 ? "tomorrow" : `in ${-diff} days`;
+    return relativeDay(day, this.day);
   }
 
   /** The `# NOW` block for a character about to talk to the user. */

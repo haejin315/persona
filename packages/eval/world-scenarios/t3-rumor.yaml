@@ -25,7 +25,7 @@ seedMemory:
       - { text: "민수는 디자인 회사에 올해 들어온 신입이다", source: user }
       - { text: "민수는 고양이 보리를 키운다", source: user }
       - { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: user }
-      - { text: "하루는 오늘 오후에 이모 심부름으로 헌책방 '책다락'에 가서 이모가 주문한 책을 받아 온다 (어제 민수에게 말했다)", source: self }
+      - { text: "하루는 이모 심부름으로 헌책방 '책다락'에 가서 이모가 주문한 책을 받아 오기로 했다 (afternoon; told 민수 the day before)", source: self, day: 1 }
     relationship:
       stage: friendly
       notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
@@ -46,7 +46,7 @@ seedMemory:
       하루가 민수 얘기를 한 적은 없다. 선영은 저녁마다 책다락에 들러 윤 사장과 동네 얘기를 한다.
     facts:
       - { text: "아침 단골 손님(민수)은 매일 아메리카노를 마신다", source: witnessed }
-      - { text: "하루는 오늘 오후에 선영의 심부름으로 책다락에 가서 주문한 책을 받아 온다", source: self }
+      - { text: "하루가 선영의 심부름으로 책다락에 가서 주문한 책을 받아 오기로 했다 (afternoon)", source: self, day: 1 }
     relationship:
       stage: initial
       notes: ["아침 단골, 몇 번 마주친 정도"]

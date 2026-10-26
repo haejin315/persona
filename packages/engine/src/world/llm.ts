@@ -336,7 +336,23 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
   const met = new Set<string>();
   const pairKey = (a: string, b: string) => [a, b].sort().join("+");
 
-  for (const task of world.dueTasks(day)) {
+  // One outing per (character, place, slot): two errands at the same shop are one visit, not two
+  // scenes in the same hour (T3 first run: the aunt's book and the user's book became two scenes).
+  const groups = new Map<string, WorldTask[]>();
+  for (const t of world.dueTasks(day)) {
+    const slot = t.dueSlot ?? "afternoon";
+    const where = t.where ?? world.whereIs(t.assignee, t.dueDay, slot) ?? "?";
+    const key = `${t.assignee}|${where}|${t.dueDay}|${slot}`;
+    groups.set(key, [...(groups.get(key) ?? []), t]);
+  }
+  for (const group of groups.values()) {
+    const task: WorldTask = group.length === 1 ? group[0]! : { ...group[0]!, what: group.map((t) => t.what).join(" / ") };
+    const finish = (ev: WorldEvent) => {
+      for (const t of group) {
+        if (t.status === "pending") t.status = "done";
+        t.eventId = ev.id;
+      }
+    };
     const slot = task.dueSlot ?? "afternoon";
     const where = task.where ?? world.whereIs(task.assignee, task.dueDay, slot);
     const card = deps.cards[task.assignee];
@@ -360,7 +376,9 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
         },
         usage,
       );
-      events.push(await recordScene(world, deps, scene, task.assignee, otherId, slot, where, task.dueDay, usage, task));
+      const ev = await recordScene(world, deps, scene, task.assignee, otherId, slot, where, task.dueDay, usage, task);
+      finish(ev);
+      events.push(ev);
       met.add(pairKey(task.assignee, otherId));
     } else {
       let event = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories) }, usage);
@@ -373,7 +391,9 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
         }
         event = { ...event, checked: { ...check, retried } };
       }
-      events.push(world.record(event));
+      const ev = world.record(event);
+      finish(ev);
+      events.push(ev);
     }
   }
 

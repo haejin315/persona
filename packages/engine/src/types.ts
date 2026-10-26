@@ -134,6 +134,11 @@ export interface Fact {
   source: FactSource;
   /** Who told the character, when `source` is "told". */
   by?: string;
+  /**
+   * World day the fact belongs to (facts that came from the ledger). The prompt renders it relative
+   * to today ("yesterday", "3 days ago") at build time; a label baked into the text would go stale.
+   */
+  day?: number;
 }
 
 /** Accept a stored fact in either shape (old recordings hold plain strings). */
@@ -144,7 +149,8 @@ export function toFact(f: unknown): Fact | undefined {
     if (typeof o.text !== "string" || !o.text.trim()) return undefined;
     const source = FACT_SOURCES.includes(o.source as FactSource) ? (o.source as FactSource) : "unknown";
     const by = typeof o.by === "string" && o.by.trim() ? o.by.trim() : undefined;
-    return { text: o.text.trim(), source, ...(by ? { by } : {}) };
+    const day = typeof o.day === "number" && Number.isFinite(o.day) ? Math.floor(o.day) : undefined;
+    return { text: o.text.trim(), source, ...(by ? { by } : {}), ...(day !== undefined ? { day } : {}) };
   }
   return undefined;
 }
@@ -160,8 +166,9 @@ export function normalizeMemory(m: MemoryState): MemoryState {
  * One prompt line per fact. With `provenance` the way the character knows it follows the fact, so the
  * prompt can ask the character to speak only from what reached them and to say how it did.
  */
-export function renderFact(f: Fact, user: string, provenance: boolean): string {
-  if (!provenance || f.source === "unknown") return f.text;
+export function renderFact(f: Fact, user: string, provenance: boolean, today?: number): string {
+  const when = f.day === undefined ? "" : `[day ${f.day}${today === undefined ? "" : `, ${relativeDay(f.day, today)}`}] `;
+  if (!provenance || f.source === "unknown") return when + f.text;
   const how: Record<Exclude<FactSource, "unknown">, string> = {
     user: `${user} told you`,
     self: "you said this yourself",
@@ -169,7 +176,16 @@ export function renderFact(f: Fact, user: string, provenance: boolean): string {
     told: f.by ? `${f.by} told you` : "someone told you",
     rumor: "rumour, unconfirmed",
   };
-  return `${f.text} (${how[f.source]})`;
+  return `${when}${f.text} (${how[f.source]})`;
+}
+
+/** "today" / "yesterday" / "3 days ago" / "tomorrow" / "in 2 days". */
+export function relativeDay(day: number, today: number): string {
+  const diff = today - day;
+  if (diff === 0) return "today";
+  if (diff === 1) return "yesterday";
+  if (diff > 1) return `${diff} days ago`;
+  return diff === -1 ? "tomorrow" : `in ${-diff} days`;
 }
 
 /** Long-term memory distilled from the conversation. */

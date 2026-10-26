@@ -273,7 +273,7 @@ ${world ? NOW_BLOCK(world, persona.name) : ""}${
     : `# MEMORY (what has happened so far - treat as true)
 ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
-${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12)))}
+${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12, world?.day)))}
 
 `
 }${variety ? `${VARIETY_BLOCK(name, persona.name, variety >= 2, variety >= 3, variety >= 4, variety >= 5, variety >= 6, variety >= 7, variety >= 8, variety >= 9, variety >= 10, variety >= 11, variety >= 12, variety >= 13)}
@@ -307,7 +307,7 @@ ${memory.relationship.stage}${memory.relationship.notes.length ? `\n${bullet(mem
 # MEMORY (what has happened so far)
 ${memory.summary || "(the conversation has just begun)"}
 Facts to remember:
-${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12)))}${
+${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12, world?.day)))}${
         recentBlock
           ? `
 
