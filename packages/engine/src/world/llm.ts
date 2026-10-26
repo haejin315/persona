@@ -124,7 +124,7 @@ export async function resolveTask(
     `# WHEN\nDay ${task.dueDay} (${world.weekdayOf(task.dueDay)}), ${slot}.`,
     args.memory?.facts.length ? `# WHAT ${name} KNOWS\n${args.memory.facts.map((f) => `- ${f.text}`).join("\n")}` : "",
     `Output JSON only: {"outcome": "done|partial|failed", "result": "ONE sentence, past tense: what is now true (what was obtained, learned or not)", "details": ["2 to 4 short concrete things ${name} saw or heard there: what the other person said (brief quote), what the object looked like, a small complication - each one a fact, no feelings"]}`,
-    "Rules: nothing dramatic (no accidents, no coincidences, no new love interests). Most errands succeed plainly; at most one small, ordinary complication. Do not invent facts about the user. Name people at the place only if the place note names them; otherwise call them by role (the owner).",
+    "Rules: nothing dramatic (no accidents, no coincidences, no new love interests). Most errands succeed plainly; at most one small, ordinary complication. Do not invent facts about the user. Name people at the place only if the place note names them; otherwise call them by role (the owner). Date things by weekday or \"day N\", never by 어제/오늘/내일: these lines are read days later.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -199,7 +199,7 @@ export async function runScene(
       ? `# THE USER\n${args.persona.name} is not present. ${args.persona.description ?? ""} Characters may mention ${args.persona.name} only from what they know above.`
       : "",
     `Output JSON only: {"scene": "the scene, 6 to 14 short lines in the *action* \\"speech\\" format, in character for both", "result": "ONE sentence, past tense: what is now true after this meeting", "details": ["2 to 4 concrete things both would remember"], "told": {"${a.id}": ["facts ${nameOf(b)} told ${nameOf(a)} that ${nameOf(a)} did not know - one line each, attributed ('${nameOf(b)} said ...')"], "${b.id}": ["facts ${nameOf(a)} told ${nameOf(b)} that ${nameOf(b)} did not know"]}}`,
-    "Rules: each character says only what they know and would say given their personality and secrets (a reserved character shares little). Nothing dramatic. If a task brought one of them, the scene resolves it plainly.",
+    "Rules: each character says only what they know and would say given their personality and secrets (a reserved character shares little). Nothing dramatic. If a task brought one of them, the scene resolves it plainly. In \"result\", \"details\" and \"told\", date things by weekday or \"day N\", never by 어제/오늘/내일 (yesterday/today/tomorrow): these lines are read days later.",
   ]
     .filter(Boolean)
     .join("\n\n");
