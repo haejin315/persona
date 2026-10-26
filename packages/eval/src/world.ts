@@ -622,7 +622,8 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
       if (p.kind === "event") lines.push(`- ${p.event.id} day ${p.event.day} ${p.event.slot} @${p.event.where} (scripted): ${p.event.result}${p.event.effects ? ` → ${JSON.stringify(p.event.effects)}` : ""}`);
       if (p.kind === "advance") {
         const scenes = p.events.filter((x) => x.origin === "scene" && x.details.length).length;
-        const told = p.events.filter((x) => Object.values(x.knownBy).some((k) => k.source === "told")).length;
+        // told lines are recorded by recordScene straight into the ledger (not returned as events), so count them there
+        const told = p.worldAfter.ledger.filter((x) => x.day >= p.fromDay && x.day < p.toDay && Object.values(x.knownBy).some((k) => k.source === "told")).length;
         // rumours spread onto events already in the ledger (a scripted notice), so count on the ledger of those days
         const rumours = p.worldAfter.ledger.filter((x) => x.day >= p.fromDay && x.day < p.toDay && Object.values(x.knownBy).some((k) => k.source === "rumor")).length;
         const conds = Object.entries(p.worldAfter.conditions ?? {}).map(([k, v]) => `${k}: ${v}`).join("; ");

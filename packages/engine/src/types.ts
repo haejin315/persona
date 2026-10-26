@@ -174,7 +174,7 @@ export function renderFact(f: Fact, user: string, provenance: boolean, today?: n
     self: "you said this yourself",
     witnessed: "you saw this happen",
     told: f.by ? `${f.by} told you` : "someone told you",
-    rumor: "rumour, unconfirmed",
+    rumor: "heard around, not seen by you",
   };
   return `${when}${f.text} (${how[f.source]})`;
 }

@@ -26,7 +26,7 @@ describe("facts with provenance", () => {
     expect(renderFact({ text: "a", source: "self" }, "민수", true)).toBe("a (you said this yourself)");
     expect(renderFact({ text: "a", source: "told", by: "이모" }, "민수", true)).toBe("a (이모 told you)");
     expect(renderFact({ text: "a", source: "told" }, "민수", true)).toBe("a (someone told you)");
-    expect(renderFact({ text: "a", source: "rumor" }, "민수", true)).toBe("a (rumour, unconfirmed)");
+    expect(renderFact({ text: "a", source: "rumor" }, "민수", true)).toBe("a (heard around, not seen by you)");
     expect(renderFact({ text: "a", source: "unknown" }, "민수", true)).toBe("a");
   });
 });
