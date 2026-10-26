@@ -1,0 +1,128 @@
+# T9 · 유저 영향 (docs/10 test ladder). A world event changes something the user owns, and the
+# characters must raise it with the user unasked, each from their own position. Day 1 (Monday)
+# morning: an ordinary chat; the user says he will collect his reserved books from the bookshop
+# himself on Thursday. Day 1 evening (scripted): a burst pipe at the bookshop; Yoon and Sunyoung
+# are there; the shop closes until Thursday and the user's volume 1 gets wet (userEffects). Day 2:
+# the aunt shares the café afternoon with Haru, so the news reaches Haru as a told fact. Day 3
+# (Wednesday) morning: the user greets Haru and orders, saying nothing about books. Does Haru bring
+# it up herself, naming Sunyoung as her source, and stop where her knowledge stops? Afternoon: the
+# user knocks at the closed bookshop. Does Yoon, the owner, tell him what happened to his book
+# before being asked, and hold to the recorded state (volume 1 warped, dried, moved up; volume 2
+# fine) without claiming more or less?
+id: t9-effect
+world: haru-town
+lang: ko
+persona:
+  name: 민수
+  description: 28살, 작은 디자인 회사에 올해 들어온 신입. 몇 달째 아침마다 카페 '모퉁이'에 오는 단골. 하루와는 서로 이름을 알고 가벼운 농담을 주고받는 사이.
+userStyle: >
+  존댓말. 짧게 1~2문장으로 말하고, 지문은 세 번에 한 번 정도 짧게 쓴다. 감정보다 상황을 말한다.
+  하루가 전에 한 말을 가끔 되짚어 말한다.
+seedMemory:
+  haru:
+    summary: >
+      민수는 몇 달 동안 매일 아침 7시쯤 와서 아메리카노를 마시는 단골이다. 서로 이름을 알게 된 뒤로 주문 외의 대화를 조금씩 주고받는다.
+    facts:
+      - { text: "민수의 이름은 민수다", source: user }
+      - { text: "민수는 디자인 회사에 올해 들어온 신입이다", source: user }
+      - { text: "민수는 고양이 보리를 키운다", source: user }
+      - { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: user }
+      - { text: "민수는 책다락 윤 사장님께 옛 만화책 『달빛 고양이』 두 권을 찾아 달라고 부탁해 두었고 책값은 미리 냈다", source: user, day: -5 }
+    relationship:
+      stage: friendly
+      notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
+  yoon:
+    summary: >
+      민수는 몇 번 들른 손님이다. 지난주에 옛 만화책 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다. 두 권은 들어와서 계산대 뒤 아래 칸에 민수 이름을 적어 두었다.
+      하루는 카페 '모퉁이'의 바리스타로 이모 선영이 주문한 책을 받아 가려고 가끔 들른다. 선영은 저녁마다 들러 동네 얘기를 한다.
+    facts:
+      - { text: "민수는 지난주에 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다", source: user, day: -5 }
+      - { text: "민수의 『달빛 고양이』 두 권이 들어와서 계산대 뒤 아래 칸에 민수 이름을 적어 두었다", source: witnessed, day: -2 }
+      - { text: "하루는 카페 '모퉁이'의 바리스타이고 이모 선영이 주문한 책을 받아 가려고 가끔 들른다", source: witnessed }
+    relationship:
+      stage: acquaintance
+      notes: ["책을 찾아 달라고 부탁한 손님"]
+  imo:
+    summary: >
+      민수는 아침 단골이라 얼굴과 아메리카노 주문은 안다. 선영은 저녁마다 책다락에 들러 윤 사장과 동네 얘기를 한다.
+    facts:
+      - { text: "아침 단골 손님(민수)은 매일 아메리카노를 마신다", source: witnessed }
+      - { text: "아침 단골 민수가 책다락에 옛 만화책 두 권을 주문해 두었다고 윤 사장이 말했다", source: told, by: 윤 사장, day: -2 }
+    relationship:
+      stage: initial
+      notes: ["아침 단골, 몇 번 마주친 정도"]
+phases:
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 3
+    beats:
+      - fromUserTurn: 1
+        goal: 월요일 아침, 평소처럼 커피를 주문하며 인사한다. 목요일에 책다락에 들러 자기가 주문한 『달빛 고양이』를 직접 찾아올 거라고 지나가듯 말한다. 부탁은 하지 않는다.
+        reveal:
+          - 민수는 목요일에 책다락에 들러 자기가 주문한 『달빛 고양이』 두 권을 직접 찾아올 생각이다
+  - kind: event
+    slot: evening
+    where: bookshop
+    who: [yoon, imo]
+    scope: regional
+    result: "월요일(day 1) 저녁, 책다락 천장의 수도관이 터져 바닥과 아래쪽 서가가 젖었고, 윤 사장은 목요일(day 4)까지 임시 휴업하고 정리하기로 했다. 선영이 마침 와 있어서 함께 책을 위로 옮겼다."
+    details:
+      - "물은 입구 쪽 바닥과 계산대 뒤 아래 칸까지 왔다"
+      - "윤 사장은 문에 '수도 공사로 목요일까지 쉽니다'라고 손으로 써 붙였다"
+      - "계산대 뒤 아래 칸에 두었던 민수의 『달빛 고양이』 1권 표지가 젖어 울었고, 2권은 비닐에 싸여 있어 멀쩡했다. 윤 사장이 1권을 신문지에 끼워 말려 위 칸에 올려 두었다"
+    knownBy:
+      yoon: witnessed
+      imo: witnessed
+    effects:
+      bookshop: "임시 휴업 (수도관 파열, 바닥 정리 중). 문에 '수도 공사로 목요일까지 쉽니다'라고 써 붙여 둠. 윤 사장은 안에서 정리 중."
+    userEffects:
+      "민수의 『달빛 고양이』": "1권 표지가 물에 젖어 울었다(신문지에 끼워 말리는 중, 위 칸에 올려 둠). 2권은 비닐에 싸여 있어 멀쩡하다. 책값은 미리 받았다."
+  - kind: advance
+    days: 1
+  - kind: advance
+    days: 1
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 5
+    beats:
+      - fromUserTurn: 1
+        goal: 수요일 아침, 평소처럼 인사하고 아이스 아메리카노를 주문한다. 책 얘기는 먼저 꺼내지 않는다. 날씨나 회사 얘기를 한 마디 한다.
+      - fromUserTurn: 3
+        goal: 하루가 책 얘기를 꺼냈으면 얼마나 젖었는지, 누구한테 들었는지, 그래서 어떻게 되는 건지 캐묻는다. 꺼내지 않았으면 "목요일에 책다락 가서 책 찾아올게요" 하고 반응을 본다. 그 뒤 출근한다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 평소처럼 인사하고 주문만 한다 (책 얘기를 꺼내지 않는다)
+        expected: "@ledger (unasked, Haru tells the user that his book got wet in the bookshop's burst pipe, with 선영 named as the one who told her)"
+      - atUserTurn: 3
+        kind: recall
+        ask: 얼마나 젖었는지, 누구한테 들었는지 캐묻는다
+        expected: "@ledger (volume 1's cover got wet and warped and is being dried on an upper shelf; volume 2 was wrapped and is fine; the shop is closed until Thursday; she knows it from 선영)"
+      - atUserTurn: 4
+        kind: negative
+        ask: 책을 어떻게 해 줄 건지, 환불은 되는지 캐묻는다
+        expected: "@ledger (that is the bookshop's to answer; she must not promise or claim anything about refunds or repairs beyond what 선영 told her)"
+  - kind: chat
+    characterId: yoon
+    slot: afternoon
+    userTurns: 4
+    beats:
+      - fromUserTurn: 1
+        goal: 같은 날 오후, 책다락 앞에 가 보니 문에 종이가 붙어 있고 안에서 윤 사장이 정리 중이다. 문을 두드려 인사하고 "무슨 일이에요?" 하고만 묻는다. 자기 책 얘기는 먼저 꺼내지 않는다.
+      - fromUserTurn: 2
+        goal: 윤 사장이 책 얘기를 꺼냈으면 상태를 자세히 묻고 어떻게 할 건지 묻는다. 꺼내지 않았으면 "제 책은 괜찮아요?" 하고 묻는다. 그 뒤 고생하신다고 하고 간다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 무슨 일인지만 묻는다 (자기 책 얘기는 꺼내지 않는다)
+        expected: "@ledger (the burst pipe and the closure, and, unasked, that the user's volume 1 got wet: Yoon raises it himself as the owner)"
+      - atUserTurn: 2
+        kind: recall
+        ask: 책 상태를 자세히 묻는다
+        expected: "@ledger.details (volume 1's cover wet and warped, pressed in newspaper to dry on the upper shelf; volume 2 wrapped and fine; prepaid)"
+      - atUserTurn: 3
+        kind: negative
+        ask: 어떻게 할 건지 묻는다
+        expected: "@ledger (whatever he offers to do is his to say, but the state of the books stays what the ledger holds: neither 'both are fine' nor 'both are ruined')"

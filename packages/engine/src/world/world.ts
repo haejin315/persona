@@ -49,6 +49,7 @@ export class World {
       clock: { day: def.startDay ?? 1, slot: "morning" },
       startWeekday: def.startWeekday ?? "Monday",
       conditions: {},
+      user: {},
       places: def.places,
       characters,
       tasks: [],
@@ -62,6 +63,7 @@ export class World {
     const s = structuredClone(state);
     s.startWeekday ??= "Monday";
     s.conditions ??= {};
+    s.user ??= {};
     return new World(s);
   }
 
@@ -159,6 +161,10 @@ export class World {
       if (cond === null) delete this.state.conditions[placeId];
       else this.state.conditions[placeId] = cond;
     }
+    for (const [label, state] of Object.entries(event.userEffects ?? {})) {
+      if (state === null) delete this.state.user[label];
+      else this.state.user[label] = state;
+    }
     if (event.taskId) {
       const t = this.state.tasks.find((x) => x.id === event.taskId);
       if (t) {
@@ -199,6 +205,8 @@ export class World {
       out.push({ text: `${e.slot}, ${this.place(e.where).name}: ${e.result}`, ...src });
       // A witness remembers the details (of errands always, of ordinary days for a while); someone who was told gets the result only.
       if (k.source === "witnessed" && (e.taskId || this.day - e.day <= this.detailDays)) for (const d of e.details) out.push({ text: d, ...src });
+      // What happened to the user's things is a marked fact for everyone who knows of the event.
+      for (const [label, state] of Object.entries(e.userEffects ?? {})) if (state) out.push({ text: `${label}: ${state}`, ...src, about: "user" });
     }
     return out;
   }

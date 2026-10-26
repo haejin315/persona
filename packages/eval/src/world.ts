@@ -86,6 +86,8 @@ const EventPhase = z.object({
   /** character id -> witnessed | told:<name> | rumor */
   knownBy: z.record(z.string(), z.string()).default({}),
   effects: z.record(z.string(), z.string().nullable()).default({}),
+  /** What the event did to the user's things, by label (T9): text = new state, null = back to usual. */
+  userEffects: z.record(z.string(), z.string().nullable()).default({}),
 });
 
 export const WorldScenario = z.object({
@@ -276,7 +278,7 @@ export async function runWorldConversation(
         else if (how.startsWith("told:")) knownBy[cid] = { source: "told", by: how.slice(5) };
         else throw new Error(`event phase ${i}: knownBy[${cid}] must be witnessed | told:<name> | rumor`);
       }
-      const ev = world.record({ day: world.day, slot: p.slot, where: p.where, who: p.who, scope: p.scope, result: p.result, details: p.details, knownBy, origin: "catchup", ...(Object.keys(p.effects).length ? { effects: p.effects } : {}) });
+      const ev = world.record({ day: world.day, slot: p.slot, where: p.where, who: p.who, scope: p.scope, result: p.result, details: p.details, knownBy, origin: "catchup", ...(Object.keys(p.effects).length ? { effects: p.effects } : {}), ...(Object.keys(p.userEffects).length ? { userEffects: p.userEffects } : {}) });
       phases.push({ index: i, kind: "event", day: world.day, event: ev });
       log(`  ${id}: phase ${i} event day ${world.day} ${p.slot} @${p.where}: ${p.result.slice(0, 60)}`);
       continue;
@@ -481,6 +483,7 @@ function knownText(rec: WorldRecord, characterId: string, day: number, charName:
       for (const d of e.details) lines.push(`    - detail: ${d}`);
     } else lines.push(`- [${when}, ${k.source}${k.by ? ` by ${k.by}` : ""}] ${e.result}`);
     for (const [pid, cond] of Object.entries(e.effects ?? {})) lines.push(`    - since then, ${rec.world.places.find((p) => p.id === pid)?.name ?? pid}: ${cond ?? "back to usual"}`);
+    for (const [label, state] of Object.entries(e.userEffects ?? {})) lines.push(`    - what this did to ${rec.persona.name}'s things, ${label}: ${state ?? "back to usual"} (${charName} knows this and may raise it unasked)`);
   }
   return lines.length ? lines.join("\n") : "(nothing: no event the character knows of happened in between)";
 }
@@ -627,8 +630,9 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
         // rumours spread onto events already in the ledger (a scripted notice), so count on the ledger of those days
         const rumours = p.worldAfter.ledger.filter((x) => x.day >= p.fromDay && x.day < p.toDay && Object.values(x.knownBy).some((k) => k.source === "rumor")).length;
         const conds = Object.entries(p.worldAfter.conditions ?? {}).map(([k, v]) => `${k}: ${v}`).join("; ");
+        const ustate = Object.entries(p.worldAfter.user ?? {}).map(([k, v]) => `${k}: ${v}`).join("; ");
         lines.push(
-          `- advance day ${p.fromDay} → ${p.toDay}: ${p.events.length} events (${p.events.filter((x) => x.origin === "world" || x.origin === "span").length} world, ${scenes} scenes, ${told} told lines, ${rumours} heard as rumour), ${p.usage.calls} world calls${p.inSpans ? ` (${p.inSpans} days in spans, ${p.dayByDay} day by day)` : ""}; conditions after: ${conds || "all usual"}`,
+          `- advance day ${p.fromDay} → ${p.toDay}: ${p.events.length} events (${p.events.filter((x) => x.origin === "world" || x.origin === "span").length} world, ${scenes} scenes, ${told} told lines, ${rumours} heard as rumour), ${p.usage.calls} world calls${p.inSpans ? ` (${p.inSpans} days in spans, ${p.dayByDay} day by day)` : ""}; conditions after: ${conds || "all usual"}${ustate ? `; ${r.persona.name}'s things: ${ustate}` : ""}`,
         );
         for (const e of p.events) lines.push(`- ${e.id} day ${e.day} ${e.slot} @${e.where} (${e.origin}): ${e.result}${e.details.length ? `\n  - ${e.details.join("\n  - ")}` : ""}`);
       }

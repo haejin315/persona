@@ -139,6 +139,8 @@ export interface Fact {
    * to today ("yesterday", "3 days ago") at build time; a label baked into the text would go stale.
    */
   day?: number;
+  /** The fact is about the user's things or a promise to the user (from an event's userEffects): the character brings it up unasked. */
+  about?: "user";
 }
 
 /** Accept a stored fact in either shape (old recordings hold plain strings). */
@@ -167,7 +169,7 @@ export function normalizeMemory(m: MemoryState): MemoryState {
  * prompt can ask the character to speak only from what reached them and to say how it did.
  */
 export function renderFact(f: Fact, user: string, provenance: boolean, today?: number): string {
-  const when = f.day === undefined ? "" : `[day ${f.day}${today === undefined ? "" : `, ${relativeDay(f.day, today)}`}] `;
+  const when = `${f.day === undefined ? "" : `[day ${f.day}${today === undefined ? "" : `, ${relativeDay(f.day, today)}`}] `}${f.about === "user" ? `[about ${user}'s things] ` : ""}`;
   if (!provenance || f.source === "unknown") return when + f.text;
   const how: Record<Exclude<FactSource, "unknown">, string> = {
     user: `${user} told you`,

@@ -385,6 +385,28 @@ describe("World + model + session", () => {
     expect(llm2.systems.find((x) => x.startsWith("You write what happened"))).not.toContain("has to tell");
   });
 
+  it("what happened to the user's things is a marked fact, and the character is told to raise it unasked", () => {
+    const w = World.create(def);
+    w.record({ day: 1, slot: "evening", where: "bookshop", who: ["haru"], scope: "personal", result: "수도관이 터졌다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "catchup", userEffects: { "민수의 책": "1권 표지가 젖었다" } });
+    expect(w.state.user).toEqual({ "민수의 책": "1권 표지가 젖었다" });
+    const facts = w.factsFor("haru", w.unsynced("haru"));
+    expect(facts.find((f) => f.about === "user")).toMatchObject({ text: "민수의 책: 1권 표지가 젖었다", source: "witnessed", day: 1 });
+    const session = new ChatSession({ card, lang: "ko", provider: fakeWorldLLM(), persona: { name: "민수" }, memory: { enabled: false } });
+    w.setClock(2);
+    syncCharacter(session, w, "haru");
+    const sys = session.buildMessages()[0]!.content;
+    expect(sys).toContain("[about 민수's things] 민수의 책: 1권 표지가 젖었다");
+    expect(sys).toContain("bring it up early and unasked");
+    // back to usual clears the state; a session without such a fact gets no such sentence
+    w.record({ day: 2, slot: "morning", where: "bookshop", who: ["haru"], scope: "personal", result: "책을 말렸다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "catchup", userEffects: { "민수의 책": null } });
+    expect(w.state.user).toEqual({});
+    const plain = new ChatSession({ card, lang: "ko", provider: fakeWorldLLM(), persona: { name: "민수" }, memory: { enabled: false } });
+    const w2 = World.create(def);
+    w2.setClock(2);
+    syncCharacter(plain, w2, "haru");
+    expect(plain.buildMessages()[0]!.content).not.toContain("bring it up early and unasked");
+  });
+
   it("a witness keeps the details of errands and of the last days; an older ordinary day keeps its result only", () => {
     const w = World.create(def);
     const t = w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 1, from: "민수" });

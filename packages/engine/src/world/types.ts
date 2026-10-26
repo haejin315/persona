@@ -86,6 +86,12 @@ export interface WorldEvent {
    * when the event is recorded. The world knows it; a character learns it through `knownBy`.
    */
   effects?: Record<string, string | null>;
+  /**
+   * What the event did to the user's things or to a promise made to the user (docs/10 T9), keyed by
+   * a label the characters can say ("민수의 책"): text = the new state, null = back to usual. The
+   * world may not act for the user, but things can happen to what the user owns.
+   */
+  userEffects?: Record<string, string | null>;
 }
 
 export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
@@ -98,6 +104,8 @@ export interface WorldState {
   startWeekday: Weekday;
   /** Current condition of places that are not as usual (closed, flooded, moved). Absent = as usual. */
   conditions: Record<string, string>;
+  /** Current state of the user's things that are not as usual, by label (set by userEffects). */
+  user: Record<string, string>;
   places: WorldPlace[];
   characters: Record<string, WorldCharacter>;
   tasks: WorldTask[];

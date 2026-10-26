@@ -193,10 +193,15 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
  * character off-screen is not here: it arrives as MEMORY facts with a `witnessed`/`told` source
  * (world/sync.ts), so the same rules that govern remembering govern it.
  */
-const NOW_BLOCK = (w: WorldBlock, user: string) => `# NOW
+const NOW_BLOCK = (w: WorldBlock, user: string, aboutUser: boolean) => `# NOW
 Day ${w.day} (${w.weekday}), ${w.slot}. You are at ${w.place}.${w.placeCondition ? ` ${w.place} right now: ${w.placeCondition}.` : ""}
 The calendar and the state of places are this world's, not ${user}'s: if ${user} has the day of the week or a place wrong, say so once, plainly, and go on. What ${user} is doing, holding or feeling right now is still ${user}'s to say.
 ${
+  aboutUser
+    ? `A fact marked [about ${user}'s things] is something that happened to what ${user} owns or was promised, which ${user} may not know yet: bring it up early and unasked, from where you stand (what you saw or were told, what you can do about it), and neither soften it nor add to it.
+`
+    : ""
+}${
   w.daysSinceUser === 0
     ? ""
     : `${w.daysSinceUser === 1 ? "A day has" : `${w.daysSinceUser} days have`} passed since you last spoke with ${user}. What you did and learned in between is in MEMORY, dated relative to today ("yesterday", "2 days ago"); it happened to you, so speak of it as your own experience when it comes up, and do not describe anything about those days that MEMORY does not hold. If MEMORY holds nothing for a stretch of those days, it was an ordinary stretch: say it was quiet; do not fill it with deliveries, customers or weather you do not remember.`
@@ -268,7 +273,7 @@ ${REGISTER_BLOCK(name, lang)}
 ## Examples of how ${name} talks
 ${examples || "(none)"}
 
-${world ? NOW_BLOCK(world, persona.name) : ""}${
+${world ? NOW_BLOCK(world, persona.name, memory.facts.some((x) => x.about === "user")) : ""}${
   splitContext
     ? ""
     : `# MEMORY (what has happened so far - treat as true)

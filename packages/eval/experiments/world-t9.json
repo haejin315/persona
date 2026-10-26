@@ -1,0 +1,14 @@
+{
+  "scenarioId": "t9-effect",
+  "arms": [
+    { "id": "v13/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true }
+  ],
+  "repeats": 3,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "verifierModel": "claude-cli:haiku",
+  "judgeModel": "claude-cli:opus",
+  "eventsPerDay": 0,
+  "outDir": "eval-results/world-t9"
+}
