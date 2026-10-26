@@ -363,7 +363,7 @@ describe("World + model + session", () => {
     // the notice is seen in the morning, so in the afternoon the aunt is back at the cafe with Haru
     w.record({ day: 1, slot: "morning", where: "market", who: ["imo"], scope: "regional", result: "단수 안내문이 붙었다", details: ["화요일부터"], knownBy: { imo: { source: "witnessed" } }, origin: "catchup" });
     w.record({ day: 1, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "우유가 늦었다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "world" });
-    await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards, sceneNews: true });
+    await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards, sceneNews: true, persona: { name: "민수" }, userBackDay: 8 });
     const notice = w.state.ledger[0]!;
     expect(notice.knownBy.haru).toEqual({ source: "rumor" });
     expect(notice.knownBy.yoon).toEqual({ source: "rumor" });
@@ -377,6 +377,7 @@ describe("World + model + session", () => {
     expect(scene).toContain("has to tell");
     expect(scene).toContain("단수 안내문이 붙었다");
     expect(scene).toContain("우유가 늦었다");
+    expect(scene).toContain("will not be back before day 8");
     // off by default: no list
     const llm2 = fakeWorldLLM();
     const w2 = World.create({ ...def, places, characters: [...def.characters, { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "home" } }] });

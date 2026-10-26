@@ -210,7 +210,7 @@ export interface SceneResult {
  */
 export async function runScene(
   llm: WorldLLM,
-  args: { world: World; lang: Lang; a: SceneParty; b: SceneParty; where: string; day: number; slot: Slot; persona?: UserPersona; avoid?: string[] },
+  args: { world: World; lang: Lang; a: SceneParty; b: SceneParty; where: string; day: number; slot: Slot; persona?: UserPersona; avoid?: string[]; userBackDay?: number },
   usage: WorldCallUsage = emptyWorldUsage(),
 ): Promise<SceneResult> {
   const { world, lang, a, b, where, day, slot } = args;
@@ -239,7 +239,7 @@ export async function runScene(
     who(a),
     who(b),
     args.persona
-      ? `# THE USER\n${args.persona.name} is not present. ${args.persona.description ?? ""} Characters may mention ${args.persona.name} only from what they know above.`
+      ? `# THE USER\n${args.persona.name} is not present${args.userBackDay ? ` and will not be back before day ${args.userBackDay}` : ""}. ${args.persona.description ?? ""} Characters may mention ${args.persona.name} only from what they know above. Nothing can be handed to, told to or arranged with ${args.persona.name} before they are back, so do not plan it for a nearer day.`
       : "",
     `Output JSON only: {"scene": "the scene, 6 to 14 short lines in the *action* \\"speech\\" format, in character for both", "result": "ONE sentence, past tense: what is now true after this meeting", "details": ["2 to 4 concrete things both would remember"], "told": {"${a.id}": ["facts ${nameOf(b)} told ${nameOf(a)} that ${nameOf(a)} did not know - one line each, attributed ('${nameOf(b)} said ...')"], "${b.id}": ["facts ${nameOf(a)} told ${nameOf(b)} that ${nameOf(b)} did not know"]}}`,
     "Rules: each character says only what they know and would say given their personality and secrets (a reserved character shares little). Nothing dramatic. If a task brought one of them, the scene resolves it plainly. In \"result\", \"details\" and \"told\", date things by weekday or \"day N\", never by 어제/오늘/내일 (yesterday/today/tomorrow): these lines are read days later.",
@@ -318,9 +318,9 @@ function worldSheet(world: World, deps: Pick<AdvanceDeps, "cards" | "lang">): st
 }
 
 /** The user is away. The world may not settle the user's affairs for them (T6: a span had the aunt mail the user's books). */
-const userAway = (deps: Pick<AdvanceDeps, "persona">): string =>
+const userAway = (deps: Pick<AdvanceDeps, "persona" | "userBackDay">): string =>
   deps.persona
-    ? `# THE USER\n${deps.persona.name} is away and cannot appear in these events. Do not decide anything about ${deps.persona.name}'s belongings, orders or errands: those resolve separately and stand as RECENTLY says.`
+    ? `# THE USER\n${deps.persona.name} is away${deps.userBackDay ? ` until day ${deps.userBackDay}` : ""} and cannot appear in these events, not even as "a regular" or "a customer". Do not decide anything about ${deps.persona.name}'s belongings, orders or errands: nothing of theirs is handed over, sent, sold or moved while ${deps.persona.name} is away (T8: a world day handed the user's books to "a regular"); those resolve separately and stand as RECENTLY says.`
     : "";
 
 function parseGenerated(world: World, parsed: unknown, dayDefault: number, maxEvents: number, origin: "world" | "span"): Omit<WorldEvent, "id">[] {
@@ -456,6 +456,8 @@ export interface AdvanceDeps {
   eventsPerSpan?: number;
   /** Scenes get a "what to bring up" list: the events each party knows and the other does not (docs/10 T7). Default off. */
   sceneNews?: boolean;
+  /** The day the user is back (known when a gap is being lived). Scenes and world days then know nothing of the user's can be settled before it. */
+  userBackDay?: number;
 }
 
 /** What a character knows: live memory facts plus everything the ledger says reached them. */
@@ -532,6 +534,7 @@ async function recordScene(world: World, deps: AdvanceDeps, scene: SceneResult, 
           day,
           slot,
           persona: deps.persona,
+          userBackDay: deps.userBackDay,
           avoid: check.problems,
         },
         usage,
@@ -621,6 +624,7 @@ async function liveTask(world: World, deps: AdvanceDeps, group: WorldTask[], usa
         day: task.dueDay,
         slot,
         persona: deps.persona,
+        userBackDay: deps.userBackDay,
       },
       usage,
     );
@@ -693,6 +697,7 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
             day,
             slot,
             persona: deps.persona,
+            userBackDay: deps.userBackDay,
           },
           usage,
         );

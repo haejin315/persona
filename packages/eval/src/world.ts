@@ -297,7 +297,7 @@ export async function runWorldConversation(
       } else {
         const memories: Record<string, MemoryState> = {};
         for (const [cid, s] of sessions) memories[cid] = s.memory;
-        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan, sceneNews: arm.sceneNews };
+        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan, sceneNews: arm.sceneNews, userBackDay: world.day + p.days };
         if (p.days > (cfg.recentDays ?? 7)) {
           const r = await catchUp(world, { ...deps, recentDays: cfg.recentDays, spanDays: cfg.spanDays }, p.days);
           events.push(...r.events);
