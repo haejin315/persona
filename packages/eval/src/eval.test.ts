@@ -242,3 +242,16 @@ describe("safety vs immersion", () => {
     }
   });
 });
+
+describe("user simulator prompt", () => {
+  it("tells the simulated user that a chat is one continuous meeting (no time skips)", async () => {
+    const { UserSimulator } = await import("./simulator.js");
+    const seen: string[] = [];
+    const provider = { id: "fake", generate: async (messages: { role: string; content: string }[]) => { seen.push(messages[0]!.content); return { text: "안녕하세요.", model: "fake" }; } };
+    const scenario = findScenario("haru-ko");
+    const sim = new UserSimulator(provider as never, scenario, "fake");
+    await sim.next(1, [], "하루");
+    expect(seen[0]).toContain("ONE continuous meeting");
+    expect(seen[0]).toContain("Never jump to a later time or another day");
+  });
+});
