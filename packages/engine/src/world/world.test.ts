@@ -20,14 +20,16 @@ const def: WorldFile = {
 };
 
 /** Provider that answers every call with the JSON the world layer asks for. */
-const fakeWorldLLM = (opts: { errand?: "done" | "failed" } = {}): LLMProvider & { calls: string[] } => {
+const fakeWorldLLM = (opts: { errand?: "done" | "failed" } = {}): LLMProvider & { calls: string[]; systems: string[] } => {
   const p = {
     id: "fake",
     defaultModel: "fake-1",
     calls: [] as string[],
+    systems: [] as string[],
     async generate(messages: { role: string; content: string }[]) {
       const sys = messages[0]!.content;
       p.calls.push(sys.slice(0, 40));
+      p.systems.push(sys);
       let text: string;
       if (sys.includes("AGREED to do later")) {
         text = JSON.stringify({ tasks: [{ what: "책다락에 가서 민수가 맡겨 둔 책이 들어왔는지 확인하고 받아 온다", where: "bookshop", dueDay: 1, dueSlot: "afternoon" }] });
@@ -335,6 +337,52 @@ describe("World + model + session", () => {
     expect(Object.keys(scene!.knownBy).sort()).toEqual(["haru", "yoon"]);
     expect(w.state.tasks[0]!.status).toBe("done");
     expect(w.factsFor("yoon", w.unsynced("yoon")).some((f) => f.day === 5 && f.source === "witnessed")).toBe(true);
+  });
+
+  it("a regional event is rumour around its region by the end of the day, and scenes can carry a what-to-tell list", async () => {
+    const llm = fakeWorldLLM();
+    const places = [
+      { id: "cafe", name: "카페", region: "동네" },
+      { id: "bookshop", name: "책방", region: "동네", hours: "11시~19시" },
+      { id: "home", name: "집" },
+      { id: "market", name: "시장", region: "동네" },
+      { id: "far", name: "성수", region: "성수" },
+    ];
+    const w = World.create({
+      ...def,
+      places,
+      characters: [
+        ...def.characters,
+        { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "home" } },
+        { id: "kael", name: "카엘", tier: "main", routine: { morning: "far", afternoon: "far", evening: "far", night: "far" } },
+      ],
+    });
+    const imoCard = { ...card, id: "imo", name: { ko: "이모", ja: "おば", en: "Aunt" } };
+    const kaelCard = { ...card, id: "kael", name: { ko: "카엘", ja: "カエル", en: "Kael" } };
+    const cards = { haru: card, yoon: yoonCard, imo: imoCard, kael: kaelCard };
+    // the notice is seen in the morning, so in the afternoon the aunt is back at the cafe with Haru
+    w.record({ day: 1, slot: "morning", where: "market", who: ["imo"], scope: "regional", result: "단수 안내문이 붙었다", details: ["화요일부터"], knownBy: { imo: { source: "witnessed" } }, origin: "catchup" });
+    w.record({ day: 1, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "우유가 늦었다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "world" });
+    await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards, sceneNews: true });
+    const notice = w.state.ledger[0]!;
+    expect(notice.knownBy.haru).toEqual({ source: "rumor" });
+    expect(notice.knownBy.yoon).toEqual({ source: "rumor" });
+    expect(notice.knownBy.imo).toEqual({ source: "witnessed" });
+    expect(notice.knownBy.kael).toBeUndefined(); // another region
+    expect(w.state.ledger[1]!.knownBy.yoon).toBeUndefined(); // personal events do not spread
+    expect(w.factsFor("yoon", w.unsynced("yoon")).map((f) => f.source)).toContain("rumor");
+    // the afternoon scene haru x imo (both have news) carried the what-to-tell lists
+    const scene = llm.systems.find((x) => x.startsWith("You write what happened"));
+    expect(scene).toBeDefined();
+    expect(scene).toContain("has to tell");
+    expect(scene).toContain("단수 안내문이 붙었다");
+    expect(scene).toContain("우유가 늦었다");
+    // off by default: no list
+    const llm2 = fakeWorldLLM();
+    const w2 = World.create({ ...def, places, characters: [...def.characters, { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "home" } }] });
+    w2.record({ day: 1, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "우유가 늦었다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "world" });
+    await advanceDay(w2, { llm: { provider: llm2 }, lang: "ko", cards: { haru: card, imo: imoCard } });
+    expect(llm2.systems.find((x) => x.startsWith("You write what happened"))).not.toContain("has to tell");
   });
 
   it("a witness keeps the details of errands and of the last days; an older ordinary day keeps its result only", () => {

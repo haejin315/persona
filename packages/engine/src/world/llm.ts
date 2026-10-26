@@ -194,6 +194,8 @@ export interface SceneParty {
   card: CharacterCard;
   memory?: MemoryState;
   task?: WorldTask;
+  /** What this party knows and the other does not, since they last met (one line each). */
+  news?: string[];
 }
 
 export interface SceneResult {
@@ -224,7 +226,12 @@ export async function runScene(
       x.memory?.facts.length
         ? `What ${nameOf(x)} knows (each line says how):\n${x.memory.facts.map((f) => `- ${f.text} [${f.source}${f.by ? `:${f.by}` : ""}]`).join("\n")}`
         : `${nameOf(x)} knows nothing special.`,
-    ].join("\n");
+      x.news?.length
+        ? `What ${nameOf(x)} has to tell ${nameOf(x === a ? b : a)} (new since they last met; ${nameOf(x)} brings these up unless they are private or secret, in their own words):\n${x.news.map((l) => `- ${l}`).join("\n")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   const system = [
     `You write what happened when two characters met, off-screen, and then report it as data. Write in ${LANG_NAME[lang]}.`,
     `# WORLD\n${a.card.world.summary}\nRules:\n${a.card.world.rules.map((r) => `- ${r}`).join("\n")}`,
@@ -353,7 +360,7 @@ export async function generateDay(world: World, deps: AdvanceDeps, day: number, 
   const k = deps.eventsPerDay ?? 0;
   if (k <= 0) return [];
   const system = [
-    `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Decide what, if anything, happened on day ${day} (${world.weekdayOf(day)}) that is worth remembering. Nothing dramatic: deliveries, weather, a shop closing early, a regular not showing up, a repair finished, a small favour. Continue threads already in RECENTLY (a closed place reopens when it said it would; set its condition back with null). Respect each place's RIGHT NOW condition.`,
+    `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Decide what, if anything, happened on day ${day} (${world.weekdayOf(day)}) that is worth remembering. Nothing dramatic: deliveries, weather, a shop closing early, a regular not showing up, a repair finished, a small favour. Continue threads already in RECENTLY (a closed place reopens when it said it would; set its condition back with null). A regional event has consequences at the places it touches (a water cut: a café cannot make espresso and closes early or serves bottled drinks; a stall stays shut): write them as that day's events with effects, and undo the effects when the cause ends. Consequences, not a chain reaction: stay under the cap. Respect each place's RIGHT NOW condition.`,
     worldSheet(world, deps),
     userAway(deps),
     `Output JSON only: {"events": [{"slot": "morning|afternoon|evening|night", "where": "<place id>", "who": ["<character ids who were there>"], "scope": "personal|regional", "result": "ONE sentence, past tense, dated by weekday or day number (never 어제/오늘/내일), in ${LANG_NAME[deps.lang]}", "details": ["0-3 concrete things a witness would remember"], "effects": {"<place id>": "new condition text, or null when back to usual"}}]}. At most ${k} event(s); an empty list is a fine answer for an ordinary day.`,
@@ -409,6 +416,7 @@ export async function catchUp(world: World, deps: AdvanceDeps & { recentDays?: n
   while (d <= spanUntil) {
     const to = Math.min(d + spanDays - 1, spanUntil);
     for (const e of await generateSpan(world, deps, d, to, usage)) events.push(world.record(e));
+    spreadRumours(world, deps, world.state.ledger.filter((e) => e.day >= d && e.day <= to));
     // tasks due inside the span are lived like any other day's (scene when the other main is there)
     for (let x = d; x <= to; x++) {
       world.setClock(x, "night");
@@ -446,6 +454,8 @@ export interface AdvanceDeps {
   eventsPerDay?: number;
   /** Events per compressed span (generateSpan), default 3. */
   eventsPerSpan?: number;
+  /** Scenes get a "what to bring up" list: the events each party knows and the other does not (docs/10 T7). Default off. */
+  sceneNews?: boolean;
 }
 
 /** What a character knows: live memory facts plus everything the ledger says reached them. */
@@ -465,14 +475,42 @@ export function knowledgeOf(world: World, id: string, memories?: Record<string, 
  * True when one of the two knows a ledger event the other does not, newer than their last meeting
  * and already past by (day, slot): an evening event is not news in that day's afternoon.
  */
-function hasNews(world: World, a: string, b: string, day: number, slot: Slot): boolean {
+/** Events `a` knows and `b` does not, since the two last met, up to (not including) `day`/`slot`. */
+export function newsFor(world: World, a: string, b: string, day: number, slot: Slot): WorldEvent[] {
   const ledger = world.state.ledger;
   const before = (e: WorldEvent) => e.day < day || (e.day === day && SLOTS.indexOf(e.slot) < SLOTS.indexOf(slot));
   let lastMet = -1;
   ledger.forEach((e, i) => {
     if (e.who.includes(a) && e.who.includes(b)) lastMet = i;
   });
-  return ledger.slice(lastMet + 1).some((e) => before(e) && ((e.knownBy[a] && !e.knownBy[b]) || (e.knownBy[b] && !e.knownBy[a])));
+  return ledger.slice(lastMet + 1).filter((e) => before(e) && e.knownBy[a] && !e.knownBy[b]);
+}
+
+function hasNews(world: World, a: string, b: string, day: number, slot: Slot): boolean {
+  return newsFor(world, a, b, day, slot).length > 0 || newsFor(world, b, a, day, slot).length > 0;
+}
+
+/** The "what to bring up" list for a scene party, when `sceneNews` is on (docs/10 T7). */
+function newsLines(world: World, deps: AdvanceDeps, from: string, to: string, day: number, slot: Slot): { news?: string[] } {
+  if (!deps.sceneNews) return {};
+  return { news: newsFor(world, from, to, day, slot).map((e) => `day ${e.day} ${e.slot}, ${world.place(e.where).name}: ${e.result}`) };
+}
+
+/**
+ * A regional event is known around its region by the end of the day: every main character whose
+ * routine passes a place in that region hears of it as rumour (the result only, no details). A
+ * world-scope event reaches everyone. Zero calls (docs/10 T7).
+ */
+function spreadRumours(world: World, deps: AdvanceDeps, events: WorldEvent[]): void {
+  for (const e of events) {
+    if (e.scope === "personal" || e.origin === "chat") continue;
+    const region = world.place(e.where).region;
+    for (const c of Object.values(world.state.characters)) {
+      if (c.tier !== "main" || !deps.cards[c.id] || e.knownBy[c.id]) continue;
+      const passes = e.scope === "world" || (!!region && Object.values(c.routine).some((pid) => pid && world.place(pid).region === region));
+      if (passes) e.knownBy[c.id] = { source: "rumor" };
+    }
+  }
 }
 
 async function recordScene(world: World, deps: AdvanceDeps, scene: SceneResult, aId: string, bId: string, slot: Slot, where: string, day: number, usage: WorldCallUsage, task?: WorldTask): Promise<WorldEvent> {
@@ -577,8 +615,8 @@ async function liveTask(world: World, deps: AdvanceDeps, group: WorldTask[], usa
       {
         world,
         lang: deps.lang,
-        a: { id: task.assignee, card, memory: knowledgeOf(world, task.assignee, deps.memories), task },
-        b: { id: otherId, card: deps.cards[otherId]!, memory: knowledgeOf(world, otherId, deps.memories) },
+        a: { id: task.assignee, card, memory: knowledgeOf(world, task.assignee, deps.memories), task, ...newsLines(world, deps, task.assignee, otherId, task.dueDay, slot) },
+        b: { id: otherId, card: deps.cards[otherId]!, memory: knowledgeOf(world, otherId, deps.memories), ...newsLines(world, deps, otherId, task.assignee, task.dueDay, slot) },
         where,
         day: task.dueDay,
         slot,
@@ -649,8 +687,8 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
           {
             world,
             lang: deps.lang,
-            a: { id: a, card: deps.cards[a]!, memory: knowledgeOf(world, a, deps.memories) },
-            b: { id: b, card: deps.cards[b]!, memory: knowledgeOf(world, b, deps.memories) },
+            a: { id: a, card: deps.cards[a]!, memory: knowledgeOf(world, a, deps.memories), ...newsLines(world, deps, a, b, day, slot) },
+            b: { id: b, card: deps.cards[b]!, memory: knowledgeOf(world, b, deps.memories), ...newsLines(world, deps, b, a, day, slot) },
             where,
             day,
             slot,
@@ -664,5 +702,7 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
       }
     }
   }
+  // By the end of the day the region has heard of its regional events (zero calls).
+  spreadRumours(world, deps, world.state.ledger.filter((e) => e.day === day));
   return events;
 }

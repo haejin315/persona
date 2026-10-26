@@ -131,6 +131,8 @@ export function findWorldScenario(id: string): WorldScenario {
 export interface WorldArm extends Arm {
   /** false = the character is never told what happened off-screen (today's 1:1 apps). Default true. */
   worldSync?: boolean;
+  /** Scenes get a "what to bring up" list (docs/10 T7). Default false. */
+  sceneNews?: boolean;
 }
 
 export interface WorldRunConfig {
@@ -153,7 +155,7 @@ export interface WorldRunConfig {
   maxFacts?: number;
   judgeModel?: string;
   outDir: string;
-  /** Arm whose user turns and world the other arms replay (default: the first arm). */
+  /** Arm whose user turns and world the other arms replay (default: the first arm). "none" = every arm runs its own world. */
   replayArmId?: string;
   maxUsd?: number;
 }
@@ -281,7 +283,7 @@ export async function runWorldConversation(
       } else {
         const memories: Record<string, MemoryState> = {};
         for (const [cid, s] of sessions) memories[cid] = s.memory;
-        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan };
+        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan, sceneNews: arm.sceneNews };
         if (p.days > (cfg.recentDays ?? 7)) {
           const r = await catchUp(world, { ...deps, recentDays: cfg.recentDays, spanDays: cfg.spanDays }, p.days);
           events.push(...r.events);
@@ -404,22 +406,25 @@ export async function runWorldMatrix(cfg: WorldRunConfig, log: (s: string) => vo
   const dir = join(cfg.outDir, "conversations");
   mkdirSync(dir, { recursive: true });
   const budget = new BudgetTracker(cfg.maxUsd);
-  const sourceArm = cfg.arms.find((a) => a.id === cfg.replayArmId) ?? cfg.arms[0]!;
+  const sourceArm = cfg.replayArmId === "none" ? undefined : (cfg.arms.find((a) => a.id === cfg.replayArmId) ?? cfg.arms[0]!);
   const out: WorldRecord[] = [];
   const load = (id: string): WorldRecord | undefined => {
     const f = join(dir, recordFileName(id));
     return !fresh && existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")) as WorldRecord) : undefined;
   };
   for (let r = 0; r < cfg.repeats; r++) {
-    const srcId = `${scenario.id}__${sourceArm.id}__r${r}`;
-    let src = load(srcId);
-    if (!src) {
-      src = await runWorldConversation(scenario, sourceArm, cfg, r, undefined, budget, log);
-      writeFileSync(join(dir, recordFileName(src.id)), JSON.stringify(src, null, 2));
-    } else log(`  resuming ${srcId}`);
-    out.push(src);
+    let src: WorldRecord | undefined;
+    if (sourceArm) {
+      const srcId = `${scenario.id}__${sourceArm.id}__r${r}`;
+      src = load(srcId);
+      if (!src) {
+        src = await runWorldConversation(scenario, sourceArm, cfg, r, undefined, budget, log);
+        writeFileSync(join(dir, recordFileName(src.id)), JSON.stringify(src, null, 2));
+      } else log(`  resuming ${srcId}`);
+      out.push(src);
+    }
     for (const arm of cfg.arms) {
-      if (arm.id === sourceArm.id) continue;
+      if (sourceArm && arm.id === sourceArm.id) continue;
       const id = `${scenario.id}__${arm.id}__r${r}`;
       let rec = load(id);
       if (!rec) {
@@ -604,7 +609,14 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
       if (p.kind === "chat" && p.tasks.length) lines.push(`- tasks after phase ${p.index}: ${p.tasks.join(" | ")}`);
       if (p.kind === "event") lines.push(`- ${p.event.id} day ${p.event.day} ${p.event.slot} @${p.event.where} (scripted): ${p.event.result}${p.event.effects ? ` → ${JSON.stringify(p.event.effects)}` : ""}`);
       if (p.kind === "advance") {
-        if (p.inSpans) lines.push(`- advance day ${p.fromDay} → ${p.toDay}: ${p.inSpans} days in spans, ${p.dayByDay} day by day, ${p.usage.calls} world calls`);
+        const scenes = p.events.filter((x) => x.origin === "scene" && x.details.length).length;
+        const told = p.events.filter((x) => Object.values(x.knownBy).some((k) => k.source === "told")).length;
+        // rumours spread onto events already in the ledger (a scripted notice), so count on the ledger of those days
+        const rumours = p.worldAfter.ledger.filter((x) => x.day >= p.fromDay && x.day < p.toDay && Object.values(x.knownBy).some((k) => k.source === "rumor")).length;
+        const conds = Object.entries(p.worldAfter.conditions ?? {}).map(([k, v]) => `${k}: ${v}`).join("; ");
+        lines.push(
+          `- advance day ${p.fromDay} → ${p.toDay}: ${p.events.length} events (${p.events.filter((x) => x.origin === "world" || x.origin === "span").length} world, ${scenes} scenes, ${told} told lines, ${rumours} heard as rumour), ${p.usage.calls} world calls${p.inSpans ? ` (${p.inSpans} days in spans, ${p.dayByDay} day by day)` : ""}; conditions after: ${conds || "all usual"}`,
+        );
         for (const e of p.events) lines.push(`- ${e.id} day ${e.day} ${e.slot} @${e.where} (${e.origin}): ${e.result}${e.details.length ? `\n  - ${e.details.join("\n  - ")}` : ""}`);
       }
     }

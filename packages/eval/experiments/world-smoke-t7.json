@@ -1,0 +1,11 @@
+{
+  "scenarioId": "t7-cascade",
+  "arms": [
+    { "id": "news/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": true, "sceneNews": true },
+    { "id": "plain/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": true, "sceneNews": false }
+  ],
+  "repeats": 1,
+  "eventsPerDay": 2,
+  "replayArmId": "none",
+  "outDir": "eval-results/world-smoke-t7"
+}
