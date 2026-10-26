@@ -238,7 +238,7 @@ describe("World + model + session", () => {
     expect(later[0]!.origin).toBe("errand");
     expect(w.state.tasks[0]!.status).toBe("done");
     // a slot spent with the user has no routine scene either
-    const w2 = World.create({ ...def, places: [...def.places, { id: "market", name: "시장" }], characters: [...def.characters, { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "home" } }] });
+    const w2 = World.create({ ...def, places: [...def.places, { id: "market", name: "시장" }], characters: [...def.characters, { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "market" } }] });
     w2.record({ day: 1, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "x", details: ["y"], knownBy: { haru: { source: "witnessed" } }, origin: "errand" });
     w2.setClock(1, "afternoon");
     w2.recordChat("haru", "민수", "cafe");
