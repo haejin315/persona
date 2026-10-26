@@ -20,7 +20,7 @@ const def: WorldFile = {
 };
 
 /** Provider that answers every call with the JSON the world layer asks for. */
-const fakeWorldLLM = (): LLMProvider & { calls: string[] } => {
+const fakeWorldLLM = (opts: { errand?: "done" | "failed" } = {}): LLMProvider & { calls: string[] } => {
   const p = {
     id: "fake",
     defaultModel: "fake-1",
@@ -47,7 +47,7 @@ const fakeWorldLLM = (): LLMProvider & { calls: string[] } => {
       } else if (sys.includes("check a story event")) {
         text = JSON.stringify({ ok: true, problems: [] });
       } else if (sys.includes("did an errand")) {
-        text = JSON.stringify({ outcome: "done", result: "하루가 책다락에서 민수의 책을 받아 왔다.", details: ["사장님이 책을 신문지에 싸 주었다", "둘째 권 표지가 바랬다"] });
+        text = JSON.stringify({ outcome: opts.errand ?? "done", result: "하루가 책다락에서 민수의 책을 받아 왔다.", details: ["사장님이 책을 신문지에 싸 주었다", "둘째 권 표지가 바랬다"] });
       } else {
         text = '*컵을 내려놓는다.* "네."';
       }
@@ -306,5 +306,35 @@ describe("World + model + session", () => {
     expect(llm.calls).toHaveLength(0);
     expect(w.day).toBe(2);
     expect(w.state.tasks[0]!.status).toBe("pending");
+  });
+
+  it("a failed errand (the shop was shut) is remembered, retried the next day, then given up", async () => {
+    const llm = fakeWorldLLM({ errand: "failed" });
+    const w = World.create(def);
+    const t = w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "민수" });
+    const first = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card }, verifier: null });
+    expect(first).toHaveLength(1);
+    expect(first[0]!.origin).toBe("errand");
+    expect(first[0]!.taskId).toBeUndefined();
+    expect(t).toMatchObject({ status: "pending", dueDay: 2, attempts: 1 });
+    const second = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card }, verifier: null });
+    expect(second).toHaveLength(1);
+    expect(t.status).toBe("done");
+    expect(t.eventId).toBe(second[0]!.id);
+    expect(w.factsFor("haru", w.unsynced("haru")).map((f) => f.day)).toEqual([1, 1, 1, 2, 2, 2]);
+  });
+
+  it("a witness keeps the details of errands and of the last days; an older ordinary day keeps its result only", () => {
+    const w = World.create(def);
+    const t = w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 1, from: "민수" });
+    w.record({ day: 1, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "우유가 늦었다", details: ["기사가 길이 막혔다고 했다"], knownBy: { haru: { source: "witnessed" } }, origin: "world" });
+    w.record({ day: 1, slot: "afternoon", where: "bookshop", who: ["haru"], scope: "personal", result: "책을 받아 왔다", details: ["표지가 바랬다"], knownBy: { haru: { source: "witnessed" } }, origin: "errand", taskId: t.id });
+    w.record({ day: 7, slot: "morning", where: "cafe", who: ["haru"], scope: "personal", result: "원두가 바뀌었다", details: ["신맛이 덜하다"], knownBy: { haru: { source: "witnessed" } }, origin: "world" });
+    w.setClock(8);
+    const texts = w.factsFor("haru", w.unsynced("haru")).map((f) => f.text);
+    expect(texts).toContain("표지가 바랬다");
+    expect(texts).toContain("신맛이 덜하다");
+    expect(texts).not.toContain("기사가 길이 막혔다고 했다");
+    expect(texts.some((x) => x.includes("우유가 늦었다"))).toBe(true);
   });
 });

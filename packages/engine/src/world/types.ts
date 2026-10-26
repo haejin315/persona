@@ -24,6 +24,8 @@ export interface WorldCharacter {
   id: string;
   name: string;
   tier: Tier;
+  /** Other names people use for this character (이모, 이모님), so the world and the judge know they are one person. */
+  aka?: string[];
   /** Where the character is in each slot when nothing else is scheduled. Missing slot = unknown/away. */
   routine: Partial<Record<Slot, string>>;
   /** For named NPCs only: a few lines standing in for a card. */
@@ -46,6 +48,8 @@ export interface WorldTask {
   createdDay: number;
   status: TaskStatus;
   eventId?: string;
+  /** Failed attempts so far (the place was shut). One retry the next day, then the errand is over. */
+  attempts?: number;
 }
 
 export type EventScope = "personal" | "regional" | "world";

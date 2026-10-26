@@ -102,6 +102,14 @@ export async function extractTasks(
   return out;
 }
 
+export type TaskOutcome = "done" | "partial" | "failed";
+
+export interface ResolvedTask {
+  event: Omit<WorldEvent, "id">;
+  /** "failed" = could not be attempted (the place was shut, the person was out); the caller retries it the next day, once. */
+  outcome: TaskOutcome;
+}
+
 /**
  * Decide what happened when a character carried out a task alone. One call, JSON out. The world's
  * rules keep it mundane; the details are what the character will later remember as a witness.
@@ -110,7 +118,7 @@ export async function resolveTask(
   llm: WorldLLM,
   args: { world: World; card: CharacterCard; lang: Lang; task: WorldTask; memory?: MemoryState; avoid?: string[] },
   usage: WorldCallUsage = emptyWorldUsage(),
-): Promise<Omit<WorldEvent, "id">> {
+): Promise<ResolvedTask> {
   const { world, card, lang, task } = args;
   const name = card.name[lang] ?? card.id;
   const slot = task.dueSlot ?? "afternoon";
@@ -124,7 +132,7 @@ export async function resolveTask(
     `# WHEN\nDay ${task.dueDay} (${world.weekdayOf(task.dueDay)}), ${slot}.`,
     args.memory?.facts.length ? `# WHAT ${name} KNOWS\n${args.memory.facts.map((f) => `- ${f.text}`).join("\n")}` : "",
     `Output JSON only: {"outcome": "done|partial|failed", "result": "ONE sentence, past tense: what is now true (what was obtained, learned or not)", "details": ["2 to 4 short concrete things ${name} saw or heard there: what the other person said (brief quote), what the object looked like, a small complication - each one a fact, no feelings"]}`,
-    "Rules: nothing dramatic (no accidents, no coincidences, no new love interests). Most errands succeed plainly; at most one small, ordinary complication. Do not invent facts about the user. Name people at the place only if the place note names them; otherwise call them by role (the owner). Date things by weekday or \"day N\", never by 어제/오늘/내일: these lines are read days later.",
+    "Rules: nothing dramatic (no accidents, no coincidences, no new love interests). Most errands succeed plainly; at most one small, ordinary complication. \"failed\" only when the errand could not be attempted at all (the place was shut, the person was away): it is tried again the next day. Do not invent facts about the user. Name people at the place only if the place note names them; otherwise call them by role (the owner). Date things by weekday or \"day N\", never by 어제/오늘/내일: these lines are read days later.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -139,18 +147,46 @@ export async function resolveTask(
   const parsed = safeJson(res.text) ?? {};
   const details = strs(parsed.details).slice(0, 4);
   const result = typeof parsed.result === "string" && parsed.result.trim() ? parsed.result.trim() : `${name} went to ${place.name}: ${task.what}`;
+  const outcome: TaskOutcome = parsed.outcome === "failed" || parsed.outcome === "partial" ? parsed.outcome : "done";
   return {
-    day: task.dueDay,
-    slot,
-    where,
-    who: [task.assignee],
-    scope: "personal",
-    result,
-    details,
-    knownBy: { [task.assignee]: { source: "witnessed" } },
-    origin: "errand",
-    taskId: task.id,
+    outcome,
+    event: {
+      day: task.dueDay,
+      slot,
+      where,
+      who: [task.assignee],
+      scope: "personal",
+      result,
+      details,
+      knownBy: { [task.assignee]: { source: "witnessed" } },
+      origin: "errand",
+      taskId: task.id,
+    },
   };
+}
+
+/**
+ * Close an errand with what happened. A failed attempt (the shop was shut on its day off) is still
+ * remembered, but the task stays pending and moves to the next day, once; a second failure ends it.
+ * (T6 first run: the Tuesday errand failed, was marked done, and the span generator then "finished"
+ * the user's errand its own way.)
+ */
+function settle(world: World, group: WorldTask[], r: ResolvedTask): WorldEvent {
+  if (r.outcome === "failed" && (group[0]!.attempts ?? 0) < 1) {
+    for (const t of group) {
+      t.attempts = (t.attempts ?? 0) + 1;
+      t.dueDay += 1;
+    }
+    const attempt = { ...r.event };
+    delete attempt.taskId; // not linked: the task is still pending
+    return world.record(attempt);
+  }
+  const ev = world.record(r.event);
+  for (const t of group) {
+    if (t.status === "pending") t.status = "done";
+    t.eventId = ev.id;
+  }
+  return ev;
 }
 
 export interface SceneParty {
@@ -263,7 +299,7 @@ function worldSheet(world: World, deps: Pick<AdvanceDeps, "cards" | "lang">): st
       const card = deps.cards[c.id];
       const who = card ? `${card.identity.role} ${card.identity.personality.slice(0, 3).join(", ")}` : (c.sketch ?? "");
       const routine = SLOTS.map((s) => `${s}: ${c.routine[s] ? world.place(c.routine[s]!).name : "-"}`).join(", ");
-      return `- ${c.id} (${c.name}, ${c.tier}): ${who}. Usually ${routine}.`;
+      return `- ${c.name}${c.aka?.length ? ` (also called ${c.aka.join(", ")})` : ""} [id ${c.id}, ${c.tier}]: ${who}. Usually ${routine}.`;
     })
     .join("\n");
   const recent = world.state.ledger
@@ -271,8 +307,14 @@ function worldSheet(world: World, deps: Pick<AdvanceDeps, "cards" | "lang">): st
     .slice(-8)
     .map((e) => `- day ${e.day} ${e.slot} @${e.where}: ${e.result}`)
     .join("\n");
-  return `# PLACES (id: name)\n${placesList(world)}\n\n# PEOPLE\n${chars}\n\n# RECENTLY (newest last)\n${recent || "(nothing yet)"}`;
+  return `# PLACES (id: name)\n${placesList(world)}\n\n# PEOPLE (name [id, tier]; in result and details write people by NAME, never by id)\n${chars}\n\n# RECENTLY (newest last)\n${recent || "(nothing yet)"}`;
 }
+
+/** The user is away. The world may not settle the user's affairs for them (T6: a span had the aunt mail the user's books). */
+const userAway = (deps: Pick<AdvanceDeps, "persona">): string =>
+  deps.persona
+    ? `# THE USER\n${deps.persona.name} is away and cannot appear in these events. Do not decide anything about ${deps.persona.name}'s belongings, orders or errands: those resolve separately and stand as RECENTLY says.`
+    : "";
 
 function parseGenerated(world: World, parsed: unknown, dayDefault: number, maxEvents: number, origin: "world" | "span"): Omit<WorldEvent, "id">[] {
   const list: unknown[] = Array.isArray((parsed as { events?: unknown })?.events) ? ((parsed as { events: unknown[] }).events) : [];
@@ -313,7 +355,7 @@ export async function generateDay(world: World, deps: AdvanceDeps, day: number, 
   const system = [
     `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Decide what, if anything, happened on day ${day} (${world.weekdayOf(day)}) that is worth remembering. Nothing dramatic: deliveries, weather, a shop closing early, a regular not showing up, a repair finished, a small favour. Continue threads already in RECENTLY (a closed place reopens when it said it would; set its condition back with null). Respect each place's RIGHT NOW condition.`,
     worldSheet(world, deps),
-    deps.persona ? `# THE USER\n${deps.persona.name} is away and cannot appear in these events.` : "",
+    userAway(deps),
     `Output JSON only: {"events": [{"slot": "morning|afternoon|evening|night", "where": "<place id>", "who": ["<character ids who were there>"], "scope": "personal|regional", "result": "ONE sentence, past tense, dated by weekday or day number (never 어제/오늘/내일), in ${LANG_NAME[deps.lang]}", "details": ["0-3 concrete things a witness would remember"], "effects": {"<place id>": "new condition text, or null when back to usual"}}]}. At most ${k} event(s); an empty list is a fine answer for an ordinary day.`,
   ]
     .filter(Boolean)
@@ -331,9 +373,9 @@ export async function generateDay(world: World, deps: AdvanceDeps, day: number, 
 export async function generateSpan(world: World, deps: AdvanceDeps, from: number, to: number, usage: WorldCallUsage): Promise<Omit<WorldEvent, "id">[]> {
   const k = deps.eventsPerSpan ?? 3;
   const system = [
-    `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Days ${from} to ${to} (${world.weekdayOf(from)} to ${world.weekdayOf(to)}, ${to - from + 1} days) pass with nobody watching. Decide the few things worth remembering from that whole stretch. Nothing dramatic; the kind of change a regular notices after a month away: a menu changed, a shop closed for a week and reopened, someone took a trip, a repair, a new regular. Continue threads in RECENTLY and close them when they would close (set a condition back with null). Respect each place's RIGHT NOW condition.`,
+    `You are the world of a quiet, realistic slice-of-life story (${LANG_NAME[deps.lang]}). Days ${from} to ${to} (${world.weekdayOf(from)} to ${world.weekdayOf(to)}, ${to - from + 1} days) pass with nobody watching. Decide the few things worth remembering from that whole stretch. Nothing dramatic; the kind of change a regular notices after a month away: a menu changed, a shop closed for a week and reopened, someone took a trip, a repair, a new regular. Continue threads in RECENTLY and close them when they would close (set a condition back with null). Do not repeat a kind of event already in RECENTLY (one menu change is a thread, six are a loop): a month brings different things. Respect each place's RIGHT NOW condition.`,
     worldSheet(world, deps),
-    deps.persona ? `# THE USER\n${deps.persona.name} is away and cannot appear in these events.` : "",
+    userAway(deps),
     `Output JSON only: {"events": [{"day": <${from}..${to}>, "slot": "morning|afternoon|evening|night", "where": "<place id>", "who": ["<character ids who were there>"], "scope": "personal|regional", "result": "ONE sentence, past tense, dated by weekday or day number, in ${LANG_NAME[deps.lang]}", "details": ["0-3 concrete things a witness would remember"], "effects": {"<place id>": "new condition text, or null when back to usual"}}]}. At most ${k} events for the whole span, in day order.`,
   ]
     .filter(Boolean)
@@ -375,8 +417,7 @@ export async function catchUp(world: World, deps: AdvanceDeps & { recentDays?: n
         const where = t.where ?? world.whereIs(t.assignee, t.dueDay, slot);
         const card = deps.cards[t.assignee];
         if (!card) continue;
-        const ev = world.record(await resolveTask(deps.llm, { world, card, lang: deps.lang, task: t, memory: knowledgeOf(world, t.assignee, deps.memories) }, usage));
-        events.push(ev);
+        events.push(settle(world, [t], await resolveTask(deps.llm, { world, card, lang: deps.lang, task: t, memory: knowledgeOf(world, t.assignee, deps.memories) }, usage)));
         void where;
       }
     }
@@ -563,19 +604,17 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
       events.push(ev);
       met.add(pairKey(task.assignee, otherId));
     } else {
-      let event = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories) }, usage);
+      let r = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories) }, usage);
       if (deps.verifier !== null) {
-        const check = await verifyEvent(deps.verifier ?? deps.llm, { task, event }, usage);
+        const check = await verifyEvent(deps.verifier ?? deps.llm, { task, event: r.event }, usage);
         let retried = false;
         if (!check.ok) {
           retried = true;
-          event = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories), avoid: check.problems }, usage);
+          r = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories), avoid: check.problems }, usage);
         }
-        event = { ...event, checked: { ...check, retried } };
+        r = { ...r, event: { ...r.event, checked: { ...check, retried } } };
       }
-      const ev = world.record(event);
-      finish(ev);
-      events.push(ev);
+      events.push(settle(world, group, r));
     }
   }
 

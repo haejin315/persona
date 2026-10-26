@@ -58,6 +58,7 @@ characters:
   # learned in the afternoon can reach her the same evening as a routine scene.
   - id: imo
     name: 선영
+    aka: [이모, 이모님]
     tier: main
     routine:
       morning: market

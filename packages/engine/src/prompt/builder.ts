@@ -199,7 +199,7 @@ The calendar and the state of places are this world's, not ${user}'s: if ${user}
 ${
   w.daysSinceUser === 0
     ? ""
-    : `${w.daysSinceUser === 1 ? "A day has" : `${w.daysSinceUser} days have`} passed since you last spoke with ${user}. What you did and learned in between is in MEMORY, dated relative to today ("yesterday", "2 days ago"); it happened to you, so speak of it as your own experience when it comes up, and do not describe anything about those days that MEMORY does not hold.`
+    : `${w.daysSinceUser === 1 ? "A day has" : `${w.daysSinceUser} days have`} passed since you last spoke with ${user}. What you did and learned in between is in MEMORY, dated relative to today ("yesterday", "2 days ago"); it happened to you, so speak of it as your own experience when it comes up, and do not describe anything about those days that MEMORY does not hold. If MEMORY holds nothing for a stretch of those days, it was an ordinary stretch: say it was quiet; do not fill it with deliveries, customers or weather you do not remember.`
 }
 
 `;

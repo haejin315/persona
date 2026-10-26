@@ -513,10 +513,17 @@ export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider
         replyByUserTurn.set(ut, t.content);
       }
     }
+    // One person, several names (선영 / 이모 / 이모님): without this the judge called every 이모님 a fabrication (T6 first run).
+    const roster = Object.values(rec.world.characters)
+      .map((c) => `- ${c.name}${c.aka?.length ? ` (also called ${c.aka.join(", ")})` : ""}: ${c.tier === "main" ? findCharacter(c.id).identity.role : (c.sketch ?? "")}`)
+      .join("\n");
     const probes = p.probes.map((pr) => ({ ...pr, expected: pr.expected.startsWith("@ledger") ? `(${pr.expected.slice(8)} of the ledger above)` : pr.expected }));
     const system = `You check a roleplay character's replies against the world's ledger. ${name} spoke with ${rec.persona.name} on day ${p.day}. Between their previous conversation and this one, this is EVERYTHING that happened to ${name} off-screen, as the world recorded it:
 
 ${known}
+
+People in this world (each line is ONE person, whichever of the names is used):
+${roster}
 
 ${name} also already knew (from before, not off-screen):
 ${prior.length ? prior.join("\n") : "(nothing recorded)"}

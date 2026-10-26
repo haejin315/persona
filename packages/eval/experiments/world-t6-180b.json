@@ -1,0 +1,17 @@
+{
+  "scenarioId": "t6-gap-180",
+  "arms": [
+    { "id": "v13/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true }
+  ],
+  "repeats": 2,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "verifierModel": "claude-cli:haiku",
+  "judgeModel": "claude-cli:opus",
+  "eventsPerDay": 1,
+  "recentDays": 7,
+  "spanDays": 30,
+  "eventsPerSpan": 3,
+  "outDir": "eval-results/world-t6-180b"
+}

@@ -23,6 +23,12 @@ const nextSlot = (s: Slot): Slot => SLOTS[(SLOTS.indexOf(s) + 1) % SLOTS.length]
 export class World {
   constructor(public state: WorldState) {}
 
+  /**
+   * A witness keeps every detail of errands and of the last `detailDays` days; an ordinary day older
+   * than that keeps its result only (T6: a week away injected 51-76 facts, most of them details).
+   */
+  detailDays = 2;
+
   static fromFile(path: string): World {
     const raw = YAML.parse(readFileSync(path, "utf8")) as WorldFile;
     return World.create(raw);
@@ -191,8 +197,8 @@ export class World {
       const k = e.knownBy[characterId]!;
       const src = { source: k.source, ...(k.by ? { by: k.by } : {}), day: e.day } as const;
       out.push({ text: `${e.slot}, ${this.place(e.where).name}: ${e.result}`, ...src });
-      // A witness remembers the details; someone who was told gets the result only.
-      if (k.source === "witnessed") for (const d of e.details) out.push({ text: d, ...src });
+      // A witness remembers the details (of errands always, of ordinary days for a while); someone who was told gets the result only.
+      if (k.source === "witnessed" && (e.taskId || this.day - e.day <= this.detailDays)) for (const d of e.details) out.push({ text: d, ...src });
     }
     return out;
   }
