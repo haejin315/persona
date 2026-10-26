@@ -1,0 +1,11 @@
+{
+  "scenarioId": "t8-week",
+  "arms": [
+    { "id": "mains-1/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": true, "mains": ["haru"] },
+    { "id": "mains-5/fake", "promptVersion": "v13-structured", "model": "fake", "worldSync": true, "mains": ["haru", "yoon", "imo", "cho", "jung"] }
+  ],
+  "repeats": 1,
+  "eventsPerDay": 1,
+  "replayArmId": "none",
+  "outDir": "eval-results/world-smoke-t8"
+}

@@ -1,0 +1,92 @@
+# The same town as haru-town with five main characters (docs/10 T8: cost per day against the
+# number of mains). Two more mains: the foreman who has the 7 o'clock coffee (cho) and the tofu
+# stall owner at the market (jung). An eval arm chooses which of the five are main for that run;
+# the rest are demoted to `named` and only appear inside scenes.
+id: haru-town-5
+startDay: 1
+startWeekday: Monday
+places:
+  - id: cafe
+    name: 카페 '모퉁이'
+    region: 동네
+    hours: 아침 7시 오픈, 저녁 8시 마감
+    note: 이모가 운영하는 작은 카페. 하루가 아침 오픈을 맡는다. 창가 2인석이 민수의 자리. 구석 자리는 조 반장이 7시에 앉는다.
+  - id: park
+    name: 카페 뒤편 골목의 작은 공원
+    region: 동네
+  - id: bookshop
+    name: 헌책방 '책다락'
+    region: 동네
+    hours: 11시~19시, 화요일 휴무
+    note: 좁고 책이 천장까지 쌓인 헌책방. 윤 사장이 혼자 본다. 하루의 이모가 자주 책을 주문한다.
+  - id: site
+    name: 카페 건너편 건물 공사 현장
+    region: 동네
+    note: 4층 건물 리모델링. 조 반장이 낮 내내 있다. 자재가 늦는 날이 많다.
+  - id: haru-home
+    name: 하루의 집
+    region: 동네
+  - id: seongsu
+    name: 성수동
+    region: 성수
+    note: 민수가 이사 간 동네. 4층 엘리베이터 없는 집.
+  - id: yoon-home
+    name: 윤 사장의 집
+    region: 동네
+  - id: market
+    name: 동네 시장
+    region: 동네
+    note: 이모가 아침마다 카페 재료를 사러 가는 곳. 안쪽에 정 씨의 두부 가게가 있다.
+  - id: imo-home
+    name: 이모의 집
+    region: 동네
+  - id: cho-home
+    name: 조 반장의 집
+    region: 동네
+  - id: jung-home
+    name: 정 씨의 집
+    region: 동네
+characters:
+  - id: haru
+    name: 하루
+    tier: main
+    routine:
+      morning: cafe
+      afternoon: cafe
+      evening: haru-home
+      night: haru-home
+  - id: yoon
+    name: 윤 사장
+    tier: main
+    routine:
+      morning: bookshop
+      afternoon: bookshop
+      evening: bookshop
+      night: yoon-home
+  - id: imo
+    name: 선영
+    aka: [이모, 이모님]
+    tier: main
+    routine:
+      morning: market
+      afternoon: cafe
+      evening: bookshop
+      night: imo-home
+  - id: cho
+    name: 조 반장
+    aka: [반장님]
+    tier: main
+    routine:
+      morning: cafe
+      afternoon: site
+      evening: market
+      night: cho-home
+  - id: jung
+    name: 정 씨
+    aka: [두부 가게 아주머니]
+    tier: main
+    routine:
+      morning: market
+      afternoon: market
+      evening: market
+      night: jung-home

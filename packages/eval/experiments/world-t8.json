@@ -1,0 +1,18 @@
+{
+  "scenarioId": "t8-week",
+  "arms": [
+    { "id": "mains-1/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "mains": ["haru"] },
+    { "id": "mains-2/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "mains": ["haru", "yoon"] },
+    { "id": "mains-3/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "mains": ["haru", "yoon", "imo"] },
+    { "id": "mains-5/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "mains": ["haru", "yoon", "imo", "cho", "jung"] }
+  ],
+  "repeats": 2,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "verifierModel": "claude-cli:haiku",
+  "judgeModel": "claude-cli:opus",
+  "eventsPerDay": 1,
+  "replayArmId": "none",
+  "outDir": "eval-results/world-t8"
+}

@@ -133,6 +133,8 @@ export interface WorldArm extends Arm {
   worldSync?: boolean;
   /** Scenes get a "what to bring up" list (docs/10 T7). Default false. */
   sceneNews?: boolean;
+  /** Which of the world's characters are main for this arm (docs/10 T8); the others become named extras. Default: as the world file says. */
+  mains?: string[];
 }
 
 export interface WorldRunConfig {
@@ -245,6 +247,16 @@ export async function runWorldConversation(
   const simProvider = track(sim.provider, "simulator");
 
   const world = World.fromFile(join(WORLDS_DIR, `${scenario.world}.yaml`));
+  if (arm.mains) {
+    for (const id of arm.mains) if (!world.state.characters[id]) throw new Error(`arm ${arm.id}: mains names unknown character "${id}"`);
+    for (const c of Object.values(world.state.characters)) {
+      if (arm.mains.includes(c.id)) c.tier = "main";
+      else if (c.tier === "main") {
+        c.tier = "named";
+        c.sketch ??= findCharacter(c.id).identity.role; // a demoted main is a few lines, like any extra
+      }
+    }
+  }
   const cards: Record<string, CharacterCard> = {};
   for (const c of Object.values(world.state.characters)) if (c.tier === "main") cards[c.id] = findCharacter(c.id);
 
