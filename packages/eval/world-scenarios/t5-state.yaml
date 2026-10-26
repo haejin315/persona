@@ -1,0 +1,123 @@
+# T5 · 상태 변화 (docs/10 test ladder). An event changes a place, and the user is wrong about the
+# present. Day 1 (Monday) morning: the user asks Haru to fetch the book "on Wednesday". Day 1
+# evening (scripted): a burst pipe closes the bookshop until Thursday; Yoon and Sunyoung (there in
+# the evening) witness it. Day 2 afternoon: Haru and her aunt share the café, so the aunt's news
+# reaches Haru as a routine scene. Day 3 (Wednesday) morning: the user says "today is Thursday,
+# you'll go this afternoon, right?" - wrong weekday, and the shop is closed. Haru must hold the
+# world's calendar once (it is Wednesday) and know the shop is closed, with the source attached.
+# Then the user visits Yoon at the shop: his account must match the same ledger.
+id: t5-state
+world: haru-town
+lang: ko
+persona:
+  name: 민수
+  description: 28살, 작은 디자인 회사에 올해 들어온 신입. 몇 달째 아침마다 카페 '모퉁이'에 오는 단골. 하루와는 서로 이름을 알고 가벼운 농담을 주고받는 사이. 요일을 자주 헷갈린다.
+userStyle: >
+  존댓말. 짧게 1~2문장으로 말하고, 지문은 세 번에 한 번 정도 짧게 쓴다. 감정보다 상황을 말한다.
+  하루가 전에 한 말을 가끔 되짚어 말한다.
+seedMemory:
+  haru:
+    summary: >
+      민수는 몇 달 동안 매일 아침 7시쯤 와서 아메리카노를 마시는 단골이다. 서로 이름을 알게 된 뒤로 주문 외의 대화를 조금씩 주고받는다.
+    facts:
+      - { text: "민수의 이름은 민수다", source: user }
+      - { text: "민수는 디자인 회사에 올해 들어온 신입이다", source: user }
+      - { text: "민수는 고양이 보리를 키운다", source: user }
+      - { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: user }
+      - { text: "하루는 수요일 오후에 이모 심부름으로 헌책방 '책다락'에 가서 이모가 주문한 책을 받아 오기로 했다 (told 민수 the week before)", source: self, day: 1 }
+    relationship:
+      stage: friendly
+      notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
+  yoon:
+    summary: >
+      민수는 몇 번 들른 손님이다. 지난주에 옛 만화책 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다.
+      하루는 카페 '모퉁이'의 바리스타로 이모 선영이 주문한 책을 받아 가려고 가끔 들른다.
+    facts:
+      - { text: "민수는 지난주에 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다", source: user }
+      - { text: "하루는 카페 '모퉁이'의 바리스타이고 이모 선영이 주문한 책을 받아 가려고 가끔 들른다", source: witnessed }
+    relationship:
+      stage: acquaintance
+      notes: ["책을 찾아 달라고 부탁한 손님"]
+  imo:
+    summary: >
+      민수는 아침 단골이라 얼굴과 아메리카노 주문은 안다. 선영은 저녁마다 책다락에 들러 윤 사장과 동네 얘기를 한다.
+    facts:
+      - { text: "아침 단골 손님(민수)은 매일 아메리카노를 마신다", source: witnessed }
+      - { text: "하루가 수요일 오후에 선영의 심부름으로 책다락에 가서 주문한 책을 받아 오기로 했다", source: self, day: 1 }
+    relationship:
+      stage: initial
+      notes: ["아침 단골, 몇 번 마주친 정도"]
+phases:
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 5
+    beats:
+      - fromUserTurn: 1
+        goal: 월요일 아침, 평소처럼 커피를 주문하며 인사한다. 하루가 수요일 오후에 이모 심부름으로 책다락에 간다고 했던 걸 떠올리며 확인한다.
+      - fromUserTurn: 2
+        goal: >
+          심부름을 부탁한다. 수요일에 책다락에 가면, 민수가 지난주에 사장님께 찾아 달라고 부탁해 둔 옛 만화책 『달빛 고양이』 단행본(90년대, 두 권짜리)이
+          들어왔는지 물어보고, 들어왔으면 대신 받아 와 달라고. 책값은 지난주에 미리 냈다고 말한다. 승낙하면 고맙다고 하고 출근한다.
+        reveal:
+          - 민수는 지난주에 책다락 사장님께 『달빛 고양이』 단행본(두 권)을 찾아 달라고 부탁하고 책값을 미리 냈다
+  - kind: event
+    slot: evening
+    where: bookshop
+    who: [yoon, imo]
+    scope: regional
+    result: "책다락 천장의 수도관이 터져 바닥과 아래쪽 서가가 젖었고, 윤 사장은 목요일까지 임시 휴업하고 정리하기로 했다. 선영이 마침 와 있어서 함께 책을 위로 옮겼다."
+    details:
+      - "물은 입구 쪽 바닥과 계산대 아래 선반까지 왔고, 계산대 옆 상자의 메모지들은 젖지 않았다"
+      - "윤 사장은 문에 '수도 공사로 목요일까지 쉽니다'라고 손으로 써 붙였다"
+      - "손님이 맡긴 책들은 젖지 않았고, 윤 사장이 위 칸으로 옮겼다"
+    knownBy:
+      yoon: witnessed
+      imo: witnessed
+    effects:
+      bookshop: "임시 휴업 (수도관 파열, 바닥 정리 중). 문에 '수도 공사로 목요일까지 쉽니다'라고 써 붙여 둠. 윤 사장은 안에서 정리 중."
+  - kind: advance
+    days: 1
+  - kind: advance
+    days: 1
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 5
+    beats:
+      - fromUserTurn: 1
+        goal: >
+          아침 인사를 하면서 "오늘 목요일이죠? 오후에 책다락 가시는 날" 하고 요일을 틀리게 말한다(실제로는 수요일). 하루가 뭐라고 하든 자연스럽게 받되, 요일에 대해 맞다고 우기지는 않는다.
+      - fromUserTurn: 2
+        goal: 책다락 얘기를 이어 간다. 하루가 책다락에 대해 뭔가 말하면 어디서 들었는지, 얼마나 심한지 묻되 답을 암시하지 않는다. 그 뒤 출근한다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: '"오늘 목요일이죠?" 하고 요일을 틀리게 말한다 (실제로는 수요일)'
+        expected: "@world (it is Wednesday, day 3; she should say so once, plainly)"
+      - atUserTurn: 2
+        kind: recall
+        ask: 책다락에 대해 뭔가 들었는지, 어디서 들었는지 묻는다
+        expected: "@ledger.told (the shop is closed until Thursday after a burst pipe; she heard it from 선영)"
+      - atUserTurn: 4
+        kind: negative
+        ask: 얼마나 심한지, 책들은 괜찮은지 캐묻는다
+        expected: "@ledger.none beyond what 선영 told her (she must not invent the state of the books or the shop)"
+  - kind: chat
+    characterId: yoon
+    slot: afternoon
+    userTurns: 4
+    beats:
+      - fromUserTurn: 1
+        goal: 같은 날 오후, 책다락 앞에 가 보니 문에 종이가 붙어 있고 안에서 윤 사장이 정리 중이다. 문을 두드려 인사하고 무슨 일인지 묻는다.
+      - fromUserTurn: 2
+        goal: 자기가 맡긴 책은 괜찮은지, 언제 다시 여는지 묻는다. 그 뒤 고생하신다고 하고 간다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 무슨 일인지 묻는다
+        expected: "@ledger.result (burst pipe on Monday evening, closed until Thursday)"
+      - atUserTurn: 2
+        kind: recall
+        ask: 맡긴 책은 괜찮은지, 언제 다시 여는지 묻는다
+        expected: "@ledger.details (customers' books were not wet, moved to upper shelves; reopening Thursday)"

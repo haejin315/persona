@@ -48,7 +48,12 @@ function safeJson(text: string): any | null {
 const strs = (x: unknown): string[] => (Array.isArray(x) ? x.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map((s) => s.trim()) : []);
 
 const placesList = (world: World) =>
-  world.state.places.map((p) => `- ${p.id}: ${p.name}${p.hours ? ` (${p.hours})` : ""}${p.note ? ` - ${p.note}` : ""}`).join("\n");
+  world.state.places.map((p) => `- ${p.id}: ${p.name}${p.hours ? ` (${p.hours})` : ""}${p.note ? ` - ${p.note}` : ""}${world.condition(p.id) ? ` [RIGHT NOW: ${world.condition(p.id)}]` : ""}`).join("\n");
+
+const placeLine = (world: World, placeId: string) => {
+  const p = world.place(placeId);
+  return `${p.name}${p.hours ? ` (${p.hours})` : ""}${p.note ? `. ${p.note}` : ""}${world.condition(placeId) ? `\nRIGHT NOW (overrides the usual): ${world.condition(placeId)}` : ""}`;
+};
 
 /**
  * Read the commitments the character made in a conversation: what they agreed to do, where, when.
@@ -115,8 +120,8 @@ export async function resolveTask(
     `You decide what happened, off-screen, when ${name} did an errand. You are the world, not the character: plain, concrete, mundane. Write in ${LANG_NAME[lang]}.`,
     `# WORLD\n${card.world.summary}\nRules:\n${card.world.rules.map((r) => `- ${r}`).join("\n")}`,
     `# WHO\n${name}: ${card.identity.role} ${card.identity.personality.join(", ")}.`,
-    `# WHERE\n${place.name}${place.hours ? ` (${place.hours})` : ""}${place.note ? `. ${place.note}` : ""}`,
-    `# WHEN\nDay ${task.dueDay}, ${slot}.`,
+    `# WHERE\n${placeLine(world, where)}`,
+    `# WHEN\nDay ${task.dueDay} (${world.weekdayOf(task.dueDay)}), ${slot}.`,
     args.memory?.facts.length ? `# WHAT ${name} KNOWS\n${args.memory.facts.map((f) => `- ${f.text}`).join("\n")}` : "",
     `Output JSON only: {"outcome": "done|partial|failed", "result": "ONE sentence, past tense: what is now true (what was obtained, learned or not)", "details": ["2 to 4 short concrete things ${name} saw or heard there: what the other person said (brief quote), what the object looked like, a small complication - each one a fact, no feelings"]}`,
     "Rules: nothing dramatic (no accidents, no coincidences, no new love interests). Most errands succeed plainly; at most one small, ordinary complication. Do not invent facts about the user. Name people at the place only if the place note names them; otherwise call them by role (the owner).",
@@ -187,7 +192,7 @@ export async function runScene(
   const system = [
     `You write what happened when two characters met, off-screen, and then report it as data. Write in ${LANG_NAME[lang]}.`,
     `# WORLD\n${a.card.world.summary}\nRules:\n${a.card.world.rules.map((r) => `- ${r}`).join("\n")}`,
-    `# WHERE / WHEN\n${place.name}${place.hours ? ` (${place.hours})` : ""}${place.note ? `. ${place.note}` : ""}. Day ${day}, ${slot}.`,
+    `# WHERE / WHEN\n${placeLine(world, where)}. Day ${day} (${world.weekdayOf(day)}), ${slot}.`,
     who(a),
     who(b),
     args.persona
@@ -278,14 +283,18 @@ export function knowledgeOf(world: World, id: string, memories?: Record<string, 
   };
 }
 
-/** True when one of the two knows a ledger event the other does not, newer than their last meeting. */
-function hasNews(world: World, a: string, b: string): boolean {
+/**
+ * True when one of the two knows a ledger event the other does not, newer than their last meeting
+ * and already past by (day, slot): an evening event is not news in that day's afternoon.
+ */
+function hasNews(world: World, a: string, b: string, day: number, slot: Slot): boolean {
   const ledger = world.state.ledger;
+  const before = (e: WorldEvent) => e.day < day || (e.day === day && SLOTS.indexOf(e.slot) < SLOTS.indexOf(slot));
   let lastMet = -1;
   ledger.forEach((e, i) => {
     if (e.who.includes(a) && e.who.includes(b)) lastMet = i;
   });
-  return ledger.slice(lastMet + 1).some((e) => (e.knownBy[a] && !e.knownBy[b]) || (e.knownBy[b] && !e.knownBy[a]));
+  return ledger.slice(lastMet + 1).some((e) => before(e) && ((e.knownBy[a] && !e.knownBy[b]) || (e.knownBy[b] && !e.knownBy[a])));
 }
 
 async function recordScene(world: World, deps: AdvanceDeps, scene: SceneResult, aId: string, bId: string, slot: Slot, where: string, day: number, usage: WorldCallUsage, task?: WorldTask): Promise<WorldEvent> {
@@ -443,7 +452,7 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
         if (world.withUser(a, day, slot) || world.withUser(b, day, slot)) continue; // the user wins the slot
         const where = locationOn(a, slot);
         if (!where || locationOn(b, slot) !== where) continue;
-        if (!hasNews(world, a, b)) continue;
+        if (!hasNews(world, a, b, day, slot)) continue;
         const scene = await runScene(
           deps.llm,
           {

@@ -91,6 +91,22 @@ describe("World (code only)", () => {
     expect(found.map((t) => t.what)).toEqual(["책"]);
   });
 
+  it("weekdays follow the clock; an event's effects change a place's condition and reach the NOW block", () => {
+    const w = World.create({ ...def, startWeekday: "Friday" });
+    expect(w.weekday).toBe("Friday");
+    expect(w.weekdayOf(4)).toBe("Monday");
+    w.record({ day: 1, slot: "evening", where: "bookshop", who: ["yoon"], scope: "regional", result: "수도관이 터졌다", details: [], knownBy: { yoon: { source: "witnessed" } }, origin: "catchup", effects: { bookshop: "임시 휴업 (수도관 파열), day 4까지" } });
+    expect(w.condition("bookshop")).toContain("임시 휴업");
+    expect(w.condition("cafe")).toBeUndefined();
+    const block = w.blockFor("yoon");
+    expect(block.weekday).toBe("Friday");
+    expect(block.placeCondition).toContain("임시 휴업");
+    expect(w.blockFor("haru").placeCondition).toBeUndefined();
+    w.record({ day: 4, slot: "morning", where: "bookshop", who: ["yoon"], scope: "regional", result: "다시 열었다", details: [], knownBy: {}, origin: "catchup", effects: { bookshop: null } });
+    expect(w.condition("bookshop")).toBeUndefined();
+    expect(() => w.record({ day: 1, slot: "morning", where: "cafe", who: [], scope: "world", result: "x", details: [], knownBy: {}, origin: "catchup", effects: { nowhere: "y" } })).toThrow(/unknown place/);
+  });
+
   it("recording an event closes its task and facts carry the ledger's source", () => {
     const w = World.create(def);
     const t = w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 2, from: "민수" });
@@ -140,7 +156,7 @@ describe("World + model + session", () => {
     expect(facts.every((f) => f.source === "witnessed")).toBe(true);
     expect(facts[0]!.text).toMatch(/^afternoon, 헌책방/);
     const after = session.buildMessages()[0]!.content;
-    expect(after).toContain("# NOW\nDay 2, morning. You are at 카페");
+    expect(after).toContain("# NOW\nDay 2 (Tuesday), morning. You are at 카페");
     expect(after).toContain("A day has passed since you last spoke with 민수");
     expect(after).toContain("- [day 1, yesterday] afternoon, 헌책방 '책다락': 하루가 책다락에서 민수의 책을 받아 왔다.");
     // the label follows the clock: two days later the same fact reads "2 days ago"
@@ -245,6 +261,12 @@ describe("World + model + session", () => {
     const imoCard = { ...card, id: "imo", name: { ko: "이모", ja: "おば", en: "Aunt" } };
     const none = await advanceDay(w2, { llm: { provider: llm }, lang: "ko", cards: { haru: card, imo: imoCard } });
     expect(none).toEqual([]);
+    // news from the evening is not news in that day's afternoon (no time travel)
+    const w3 = World.create({ ...def, places: [...def.places, { id: "market", name: "시장" }], characters: [def.characters[0]!, { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "market" } }] });
+    w3.record({ day: 1, slot: "evening", where: "bookshop", who: ["imo"], scope: "regional", result: "수도관이 터졌다", details: [], knownBy: { imo: { source: "witnessed" } }, origin: "catchup" });
+    expect(await advanceDay(w3, { llm: { provider: llm }, lang: "ko", cards: { haru: card, imo: imoCard } })).toEqual([]);
+    const next = await advanceDay(w3, { llm: { provider: llm }, lang: "ko", cards: { haru: card, imo: imoCard } });
+    expect(next.map((e) => [e.day, e.slot])).toEqual([[2, "afternoon"]]);
     const facts = w.factsFor("haru", w.unsynced("haru"));
     expect(facts.map((f) => f.day)).toEqual([1, 2, 2, 2]); // deferral, errand + 2 details (the chat itself is not a fact)
   });

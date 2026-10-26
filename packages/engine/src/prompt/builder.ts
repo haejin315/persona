@@ -194,7 +194,8 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
  * (world/sync.ts), so the same rules that govern remembering govern it.
  */
 const NOW_BLOCK = (w: WorldBlock, user: string) => `# NOW
-Day ${w.day}, ${w.slot}. You are at ${w.place}.
+Day ${w.day} (${w.weekday}), ${w.slot}. You are at ${w.place}.${w.placeCondition ? ` ${w.place} right now: ${w.placeCondition}.` : ""}
+The calendar and the state of places are this world's, not ${user}'s: if ${user} has the day of the week or a place wrong, say so once, plainly, and go on. What ${user} is doing, holding or feeling right now is still ${user}'s to say.
 ${
   w.daysSinceUser === 0
     ? ""

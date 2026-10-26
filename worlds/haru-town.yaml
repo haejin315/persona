@@ -3,6 +3,7 @@
 # `named` is a few lines and a fixed routine (it only appears inside a main character's scene).
 id: haru-town
 startDay: 1
+startWeekday: Monday
 places:
   - id: cafe
     name: 카페 '모퉁이'

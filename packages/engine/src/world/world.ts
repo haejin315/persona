@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import YAML from "yaml";
 import { relativeDay, type Fact } from "../types.js";
-import { SLOTS, type Slot, type WorldBlock, type WorldCharacter, type WorldEvent, type WorldPlace, type WorldState, type WorldTask } from "./types.js";
+import { SLOTS, WEEKDAYS, type Slot, type Weekday, type WorldBlock, type WorldCharacter, type WorldEvent, type WorldPlace, type WorldState, type WorldTask } from "./types.js";
 
 export interface WorldFile {
   id: string;
@@ -9,6 +9,8 @@ export interface WorldFile {
   characters: WorldCharacter[];
   /** Starting day (default 1). */
   startDay?: number;
+  /** Weekday of day 1 (default Monday). */
+  startWeekday?: Weekday;
 }
 
 const nextSlot = (s: Slot): Slot => SLOTS[(SLOTS.indexOf(s) + 1) % SLOTS.length]!;
@@ -35,9 +37,12 @@ export class World {
       }
       characters[c.id] = c;
     }
+    if (def.startWeekday && !WEEKDAYS.includes(def.startWeekday)) throw new Error(`world ${def.id}: unknown weekday "${def.startWeekday}"`);
     return new World({
       id: def.id,
       clock: { day: def.startDay ?? 1, slot: "morning" },
+      startWeekday: def.startWeekday ?? "Monday",
+      conditions: {},
       places: def.places,
       characters,
       tasks: [],
@@ -48,7 +53,10 @@ export class World {
   }
 
   static restore(state: WorldState): World {
-    return new World(structuredClone(state));
+    const s = structuredClone(state);
+    s.startWeekday ??= "Monday";
+    s.conditions ??= {};
+    return new World(s);
   }
 
   get day() {
@@ -56,6 +64,19 @@ export class World {
   }
   get slot() {
     return this.state.clock.slot;
+  }
+
+  weekdayOf(day: number): Weekday {
+    const start = WEEKDAYS.indexOf(this.state.startWeekday);
+    return WEEKDAYS[(((start + day - 1) % 7) + 7) % 7]!;
+  }
+  get weekday(): Weekday {
+    return this.weekdayOf(this.day);
+  }
+
+  /** A place's current condition, when it is not as usual. */
+  condition(placeId: string): string | undefined {
+    return this.state.conditions[placeId];
   }
 
   place(id: string): WorldPlace {
@@ -127,6 +148,11 @@ export class World {
   record(e: Omit<WorldEvent, "id">): WorldEvent {
     const event: WorldEvent = { ...e, id: `ev-${this.state.ledger.length + 1}` };
     this.state.ledger.push(event);
+    for (const [placeId, cond] of Object.entries(event.effects ?? {})) {
+      this.place(placeId); // throws on an unknown place
+      if (cond === null) delete this.state.conditions[placeId];
+      else this.state.conditions[placeId] = cond;
+    }
     if (event.taskId) {
       const t = this.state.tasks.find((x) => x.id === event.taskId);
       if (t) {
@@ -180,10 +206,13 @@ export class World {
   blockFor(characterId: string): WorldBlock {
     const placeId = this.whereIs(characterId);
     const last = this.state.lastSeen[characterId];
+    const cond = placeId ? this.condition(placeId) : undefined;
     return {
       day: this.day,
+      weekday: this.weekday,
       slot: this.slot,
       place: placeId ? this.place(placeId).name : "(unknown)",
+      ...(cond ? { placeCondition: cond } : {}),
       daysSinceUser: last === undefined ? 0 : this.day - last,
     };
   }

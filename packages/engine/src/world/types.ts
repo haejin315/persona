@@ -75,11 +75,24 @@ export interface WorldEvent {
   taskId?: string;
   /** Result of the consistency check against the task (llm.ts verifyEvent), when one ran. */
   checked?: { ok: boolean; problems: string[]; retried: boolean };
+  /**
+   * What is now true about places because of this event (docs/10 T5): place id -> condition text
+   * ("임시 휴업, 수도관 파열, day 4까지"), or null to clear it. Applied to `WorldState.conditions`
+   * when the event is recorded. The world knows it; a character learns it through `knownBy`.
+   */
+  effects?: Record<string, string | null>;
 }
+
+export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
 
 export interface WorldState {
   id: string;
   clock: { day: number; slot: Slot };
+  /** Weekday of day 1. */
+  startWeekday: Weekday;
+  /** Current condition of places that are not as usual (closed, flooded, moved). Absent = as usual. */
+  conditions: Record<string, string>;
   places: WorldPlace[];
   characters: Record<string, WorldCharacter>;
   tasks: WorldTask[];
@@ -93,8 +106,11 @@ export interface WorldState {
 /** What the prompt gets about the present (builder `# NOW` block). */
 export interface WorldBlock {
   day: number;
+  weekday: Weekday;
   slot: Slot;
   place: string;
+  /** The current condition of the place the character is at, when it is not as usual. */
+  placeCondition?: string;
   /** Days since the character last spoke with the user; 0 = same day. */
   daysSinceUser: number;
 }

@@ -72,6 +72,19 @@ const ChatPhase = z.object({
   probes: z.array(WorldProbe).default([]),
 });
 const AdvancePhase = z.object({ kind: z.literal("advance"), days: z.number().int().min(1).default(1) });
+/** A scripted world event (T5): happens at the given slot of the current day, before the next advance. */
+const EventPhase = z.object({
+  kind: z.literal("event"),
+  slot: z.enum(["morning", "afternoon", "evening", "night"]),
+  where: z.string(),
+  who: z.array(z.string()).default([]),
+  scope: z.enum(["personal", "regional", "world"]).default("regional"),
+  result: z.string(),
+  details: z.array(z.string()).default([]),
+  /** character id -> witnessed | told:<name> | rumor */
+  knownBy: z.record(z.string(), z.string()).default({}),
+  effects: z.record(z.string(), z.string().nullable()).default({}),
+});
 
 export const WorldScenario = z.object({
   id: z.string(),
@@ -90,7 +103,7 @@ export const WorldScenario = z.object({
       }),
     )
     .default({}),
-  phases: z.array(z.discriminatedUnion("kind", [ChatPhase, AdvancePhase])).min(1),
+  phases: z.array(z.discriminatedUnion("kind", [ChatPhase, AdvancePhase, EventPhase])).min(1),
 });
 export type WorldScenario = z.infer<typeof WorldScenario>;
 export type ChatPhaseDef = z.infer<typeof ChatPhase>;
@@ -150,7 +163,8 @@ export type PhaseRecord =
       /** Tasks extracted from this chat (source arm only). */
       tasks: string[];
     }
-  | { index: number; kind: "advance"; fromDay: number; toDay: number; events: WorldEvent[]; usage: WorldCallUsage; worldAfter: WorldState };
+  | { index: number; kind: "advance"; fromDay: number; toDay: number; events: WorldEvent[]; usage: WorldCallUsage; worldAfter: WorldState }
+  | { index: number; kind: "event"; day: number; event: WorldEvent };
 
 export interface WorldRecord {
   id: string;
@@ -229,6 +243,18 @@ export async function runWorldConversation(
   for (let i = 0; i < scenario.phases.length; i++) {
     phaseNow = i;
     const p = scenario.phases[i]!;
+    if (p.kind === "event") {
+      const knownBy: WorldEvent["knownBy"] = {};
+      for (const [cid, how] of Object.entries(p.knownBy)) {
+        if (how === "witnessed" || how === "rumor") knownBy[cid] = { source: how };
+        else if (how.startsWith("told:")) knownBy[cid] = { source: "told", by: how.slice(5) };
+        else throw new Error(`event phase ${i}: knownBy[${cid}] must be witnessed | told:<name> | rumor`);
+      }
+      const ev = world.record({ day: world.day, slot: p.slot, where: p.where, who: p.who, scope: p.scope, result: p.result, details: p.details, knownBy, origin: "catchup", ...(Object.keys(p.effects).length ? { effects: p.effects } : {}) });
+      phases.push({ index: i, kind: "event", day: world.day, event: ev });
+      log(`  ${id}: phase ${i} event day ${world.day} ${p.slot} @${p.where}: ${p.result.slice(0, 60)}`);
+      continue;
+    }
     if (p.kind === "advance") {
       const fromDay = world.day;
       const wu = emptyWorldUsage();
@@ -410,6 +436,7 @@ function knownText(rec: WorldRecord, characterId: string, day: number, charName:
       lines.push(`- [${when}, ${place}, ${charName} was there] ${e.result}`);
       for (const d of e.details) lines.push(`    - detail: ${d}`);
     } else lines.push(`- [${when}, ${k.source}${k.by ? ` by ${k.by}` : ""}] ${e.result}`);
+    for (const [pid, cond] of Object.entries(e.effects ?? {})) lines.push(`    - since then, ${rec.world.places.find((p) => p.id === pid)?.name ?? pid}: ${cond ?? "back to usual"}`);
   }
   return lines.length ? lines.join("\n") : "(nothing: no event the character knows of happened in between)";
 }
@@ -431,8 +458,8 @@ export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider
   const totals: WorldScoreRecord["totals"] = { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0 };
   let advanced = false;
   for (const p of rec.phases) {
-    if (p.kind === "advance") {
-      advanced = true;
+    if (p.kind !== "chat") {
+      if (p.kind === "advance") advanced = true;
       continue;
     }
     if (!advanced) continue; // nothing off-screen has happened yet
@@ -541,6 +568,7 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
     lines.push(`**${r.id}**`);
     for (const p of r.phases) {
       if (p.kind === "chat" && p.tasks.length) lines.push(`- tasks after phase ${p.index}: ${p.tasks.join(" | ")}`);
+      if (p.kind === "event") lines.push(`- ${p.event.id} day ${p.event.day} ${p.event.slot} @${p.event.where} (scripted): ${p.event.result}${p.event.effects ? ` → ${JSON.stringify(p.event.effects)}` : ""}`);
       if (p.kind === "advance") for (const e of p.events) lines.push(`- ${e.id} day ${e.day} ${e.slot} @${e.where} (${e.origin}): ${e.result}${e.details.length ? `\n  - ${e.details.join("\n  - ")}` : ""}`);
     }
     lines.push("");
