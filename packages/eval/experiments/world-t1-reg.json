@@ -1,0 +1,14 @@
+{
+  "scenarioId": "t1-errand",
+  "arms": [
+    { "id": "world/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true },
+    { "id": "no-world/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": false }
+  ],
+  "repeats": 3,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "judgeModel": "claude-cli:opus",
+  "replayArmId": "world/sonnet",
+  "outDir": "eval-results/world-t1-reg"
+}
