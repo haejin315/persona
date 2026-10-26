@@ -24,7 +24,7 @@ const persona = { name: "민수", description: "28살 회사원" };
 
 describe("character cards", () => {
   it("load and have ko + ja style blocks", () => {
-    expect(cards.map((c) => c.id).sort()).toEqual(["haru", "kael", "yoon"]);
+    expect(cards.map((c) => c.id).sort()).toEqual(["haru", "imo", "kael", "yoon"]);
     for (const c of cards) {
       expect(c.style.ko).toBeDefined();
       expect(c.style.ja).toBeDefined();
@@ -92,7 +92,7 @@ describe("prompt versions", () => {
   });
 
   it("fills {{user}} in the first message", () => {
-    const s = new ChatSession({ card: cards[1]!, lang: "ko", provider: fake(), persona });
+    const s = new ChatSession({ card: cards.find((c) => c.id === "kael")!, lang: "ko", provider: fake(), persona });
     expect(s.open().content).toContain("민수의 짐");
   });
 });

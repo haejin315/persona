@@ -105,7 +105,19 @@ export interface Turn {
   index: number;
   ts: number;
   /** Model and prompt version that produced a character turn (for eval attribution). */
-  meta?: { model?: string; promptVersion?: string; latencyMs?: number; usage?: TokenUsage; filters?: string[] };
+  meta?: {
+    model?: string;
+    promptVersion?: string;
+    latencyMs?: number;
+    usage?: TokenUsage;
+    filters?: string[];
+    /**
+     * On a user turn: time passed before it ("The next day: day 2, morning, at 카페"). Rendered as a
+     * bracketed line ahead of the message in the prompt and in the memory transcript, so the
+     * conversation window does not read as one continuous sitting (docs/10 T2).
+     */
+    boundary?: string;
+  };
 }
 
 /**
@@ -191,6 +203,9 @@ export interface ChatMessage {
    */
   kind?: "context";
 }
+
+/** A turn as it appears in a transcript or prompt: the day boundary, if any, ahead of the text. */
+export const turnText = (t: Turn): string => (t.meta?.boundary ? `[${t.meta.boundary}]\n${t.content}` : t.content);
 
 /** Replace {{user}} placeholders with the persona's name. */
 export function fillUser(text: string, persona: UserPersona): string {

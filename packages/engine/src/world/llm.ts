@@ -97,7 +97,7 @@ export async function extractTasks(
  */
 export async function resolveTask(
   llm: WorldLLM,
-  args: { world: World; card: CharacterCard; lang: Lang; task: WorldTask; memory?: MemoryState },
+  args: { world: World; card: CharacterCard; lang: Lang; task: WorldTask; memory?: MemoryState; avoid?: string[] },
   usage: WorldCallUsage = emptyWorldUsage(),
 ): Promise<Omit<WorldEvent, "id">> {
   const { world, card, lang, task } = args;
@@ -120,7 +120,7 @@ export async function resolveTask(
   const res = await llm.provider.generate(
     [
       { role: "system", content: system },
-      { role: "user", content: `TASK: ${task.what}` },
+      { role: "user", content: `TASK: ${task.what}${args.avoid?.length ? `\n\nA previous attempt contradicted the task; do not repeat these:\n${args.avoid.map((p) => `- ${p}`).join("\n")}` : ""}` },
     ],
     { model: llm.model, temperature: 0.7, maxTokens: 500 },
   );
@@ -161,7 +161,7 @@ export interface SceneResult {
  */
 export async function runScene(
   llm: WorldLLM,
-  args: { world: World; lang: Lang; a: SceneParty; b: SceneParty; where: string; day: number; slot: Slot; persona?: UserPersona },
+  args: { world: World; lang: Lang; a: SceneParty; b: SceneParty; where: string; day: number; slot: Slot; persona?: UserPersona; avoid?: string[] },
   usage: WorldCallUsage = emptyWorldUsage(),
 ): Promise<SceneResult> {
   const { world, lang, a, b, where, day, slot } = args;
@@ -195,7 +195,7 @@ export async function runScene(
   const res = await llm.provider.generate(
     [
       { role: "system", content: system },
-      { role: "user", content: "Write the scene and the report." },
+      { role: "user", content: `Write the scene and the report.${args.avoid?.length ? `\n\nA previous attempt contradicted the errand; do not repeat these:\n${args.avoid.map((p) => `- ${p}`).join("\n")}` : ""}` },
     ],
     { model: llm.model, temperature: 0.8, maxTokens: 1400 },
   );
@@ -222,28 +222,121 @@ export async function runScene(
   };
 }
 
+/**
+ * Check a decided event against the task that caused it: counts, titles, names and what was asked
+ * must not be contradicted (one scene turned a two-volume set into volumes 1 and 3, and both
+ * characters then repeated it faithfully - docs/10 T2). One cheap call; the caller retries once.
+ */
+export async function verifyEvent(
+  llm: WorldLLM,
+  args: { task: WorldTask; event: Omit<WorldEvent, "id"> },
+  usage: WorldCallUsage = emptyWorldUsage(),
+): Promise<{ ok: boolean; problems: string[] }> {
+  const { task, event } = args;
+  const system = [
+    "You check a story event against the errand that caused it. Only hard contradictions count: a different count, title, name, object or outcome than the errand states or implies (a two-volume set has no volume 3; a book asked for by name is not a different book). Small complications (not in stock yet, a worn cover) are fine. Missing detail is fine.",
+    'Output JSON only: {"ok": true|false, "problems": ["one line each, only for contradictions"]}',
+  ].join("\n");
+  const user = `ERRAND: ${task.what}\n\nRESULT: ${event.result}\nDETAILS:\n${event.details.map((d) => `- ${d}`).join("\n")}${event.scene ? `\nSCENE:\n${event.scene}` : ""}`;
+  const res = await llm.provider.generate([{ role: "system", content: system }, { role: "user", content: user }], { model: llm.model, temperature: 0, maxTokens: 300 });
+  add(usage, res);
+  const parsed = safeJson(res.text) ?? {};
+  const problems = strs(parsed.problems);
+  return { ok: parsed.ok !== false && problems.length === 0, problems };
+}
+
 export interface AdvanceDeps {
   llm: WorldLLM;
+  /** Model for verifyEvent (default: `llm`). A small model is enough. */
+  verifier?: WorldLLM | null;
   lang: Lang;
   cards: Record<string, CharacterCard>;
+  /** Live session memories; what the ledger says a character knows is added on top. */
   memories?: Record<string, MemoryState>;
   persona?: UserPersona;
   usage?: WorldCallUsage;
+  /** Routine scenes per day between co-located main characters who have news for each other (default 1; 0 = off). */
+  scenesPerDay?: number;
+}
+
+/** What a character knows: live memory facts plus everything the ledger says reached them. */
+export function knowledgeOf(world: World, id: string, memories?: Record<string, MemoryState>): MemoryState {
+  const base = memories?.[id];
+  const have = new Set((base?.facts ?? []).map((f) => f.text));
+  const fromLedger = world.factsFor(id, world.state.ledger.filter((e) => e.knownBy[id])).filter((f) => !have.has(f.text));
+  return {
+    summary: base?.summary ?? "",
+    facts: [...(base?.facts ?? []), ...fromLedger],
+    relationship: base?.relationship ?? { stage: "initial", notes: [] },
+    coveredUpTo: base?.coveredUpTo ?? -1,
+  };
+}
+
+/** True when one of the two knows a ledger event the other does not, newer than their last meeting. */
+function hasNews(world: World, a: string, b: string): boolean {
+  const ledger = world.state.ledger;
+  let lastMet = -1;
+  ledger.forEach((e, i) => {
+    if (e.who.includes(a) && e.who.includes(b)) lastMet = i;
+  });
+  return ledger.slice(lastMet + 1).some((e) => (e.knownBy[a] && !e.knownBy[b]) || (e.knownBy[b] && !e.knownBy[a]));
+}
+
+async function recordScene(world: World, deps: AdvanceDeps, scene: SceneResult, aId: string, bId: string, slot: Slot, where: string, day: number, usage: WorldCallUsage, task?: WorldTask): Promise<WorldEvent> {
+  let event = scene.event;
+  let learned = scene.learned;
+  if (task && deps.verifier !== null) {
+    const check = await verifyEvent(deps.verifier ?? deps.llm, { task, event }, usage);
+    let retried = false;
+    if (!check.ok) {
+      retried = true;
+      const again = await runScene(
+        deps.llm,
+        {
+          world,
+          lang: deps.lang,
+          a: { id: aId, card: deps.cards[aId]!, memory: knowledgeOf(world, aId, deps.memories), task },
+          b: { id: bId, card: deps.cards[bId]!, memory: knowledgeOf(world, bId, deps.memories) },
+          where,
+          day,
+          slot,
+          persona: deps.persona,
+          avoid: check.problems,
+        },
+        usage,
+      );
+      event = again.event;
+      learned = again.learned;
+    }
+    event = { ...event, checked: { ...check, retried } };
+  }
+  const ev = world.record(event);
+  for (const [id, lines] of Object.entries(learned)) {
+    const teller = id === aId ? bId : aId;
+    const by = deps.cards[teller]!.name[deps.lang] ?? teller;
+    for (const line of lines) {
+      world.record({ day, slot, where, who: [aId, bId], scope: "personal", result: line, details: [], knownBy: { [id]: { source: "told", by } }, origin: "scene" });
+    }
+  }
+  return ev;
 }
 
 /**
- * Move the world forward one day and live through every task that fell due. When another main
- * character is at the task's place in its slot, the task resolves as a scene between the two;
- * otherwise alone. A routine day with no tasks costs no calls.
+ * Move the world forward one day and live through the day that ended. Every task due by then is
+ * resolved: as a scene when another main character is at the task's place in its slot, otherwise
+ * alone, checked against the task and redone once if it contradicts it. Then, up to `scenesPerDay`
+ * routine scenes between main characters who share a place and have news for each other. A quiet
+ * day costs no calls.
  */
 export async function advanceDay(world: World, deps: AdvanceDeps): Promise<WorldEvent[]> {
   const usage = deps.usage ?? emptyWorldUsage();
   world.setClock(world.day + 1, "morning");
+  const day = world.day - 1;
   const events: WorldEvent[] = [];
-  // The day that just ended is lived through: every task due on or before it is resolved, so a
-  // character met on the morning of day d+1 can speak about what they did on day d. A task due
-  // later on d+1 stays pending.
-  for (const task of world.dueTasks(world.day - 1)) {
+  const met = new Set<string>();
+  const pairKey = (a: string, b: string) => [a, b].sort().join("+");
+
+  for (const task of world.dueTasks(day)) {
     const slot = task.dueSlot ?? "afternoon";
     const where = task.where ?? world.whereIs(task.assignee, task.dueDay, slot);
     const card = deps.cards[task.assignee];
@@ -258,8 +351,8 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
         {
           world,
           lang: deps.lang,
-          a: { id: task.assignee, card, memory: deps.memories?.[task.assignee], task },
-          b: { id: otherId, card: deps.cards[otherId]!, memory: deps.memories?.[otherId] },
+          a: { id: task.assignee, card, memory: knowledgeOf(world, task.assignee, deps.memories), task },
+          b: { id: otherId, card: deps.cards[otherId]!, memory: knowledgeOf(world, otherId, deps.memories) },
           where,
           day: task.dueDay,
           slot,
@@ -267,17 +360,57 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
         },
         usage,
       );
-      events.push(world.record(scene.event));
-      // What each was told is its own ledger line with a `told` source, so provenance survives.
-      for (const [id, lines] of Object.entries(scene.learned)) {
-        const teller = id === task.assignee ? otherId : task.assignee;
-        const by = deps.cards[teller]!.name[deps.lang] ?? teller;
-        for (const line of lines) {
-          world.record({ day: task.dueDay, slot, where, who: [task.assignee, otherId], scope: "personal", result: line, details: [], knownBy: { [id]: { source: "told", by } }, origin: "scene" });
-        }
-      }
+      events.push(await recordScene(world, deps, scene, task.assignee, otherId, slot, where, task.dueDay, usage, task));
+      met.add(pairKey(task.assignee, otherId));
     } else {
-      events.push(world.record(await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: deps.memories?.[task.assignee] }, usage)));
+      let event = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories) }, usage);
+      if (deps.verifier !== null) {
+        const check = await verifyEvent(deps.verifier ?? deps.llm, { task, event }, usage);
+        let retried = false;
+        if (!check.ok) {
+          retried = true;
+          event = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories), avoid: check.problems }, usage);
+        }
+        event = { ...event, checked: { ...check, retried } };
+      }
+      events.push(world.record(event));
+    }
+  }
+
+  // Routine scenes: co-located main characters with something to tell, capped per day. Where a
+  // character actually was in a slot is the place of an event they took part in, else the routine.
+  const locationOn = (id: string, slot: Slot): string | undefined =>
+    world.state.ledger.find((e) => e.day === day && e.slot === slot && e.who.includes(id))?.where ?? world.character(id).routine[slot];
+  let budget = deps.scenesPerDay ?? 1;
+  const mains = Object.keys(world.state.characters).filter((id) => world.character(id).tier === "main" && deps.cards[id]);
+  for (const slot of SLOTS) {
+    if (budget <= 0) break;
+    for (let i = 0; i < mains.length && budget > 0; i++) {
+      for (let j = i + 1; j < mains.length && budget > 0; j++) {
+        const a = mains[i]!;
+        const b = mains[j]!;
+        if (met.has(pairKey(a, b))) continue;
+        const where = locationOn(a, slot);
+        if (!where || locationOn(b, slot) !== where) continue;
+        if (!hasNews(world, a, b)) continue;
+        const scene = await runScene(
+          deps.llm,
+          {
+            world,
+            lang: deps.lang,
+            a: { id: a, card: deps.cards[a]!, memory: knowledgeOf(world, a, deps.memories) },
+            b: { id: b, card: deps.cards[b]!, memory: knowledgeOf(world, b, deps.memories) },
+            where,
+            day,
+            slot,
+            persona: deps.persona,
+          },
+          usage,
+        );
+        events.push(await recordScene(world, deps, scene, a, b, slot, where, day, usage));
+        met.add(pairKey(a, b));
+        budget--;
+      }
     }
   }
   return events;

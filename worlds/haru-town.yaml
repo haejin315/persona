@@ -27,6 +27,13 @@ places:
   - id: yoon-home
     name: 윤 사장의 집
     region: 동네
+  - id: market
+    name: 동네 시장
+    region: 동네
+    note: 이모가 아침마다 카페 재료를 사러 가는 곳.
+  - id: imo-home
+    name: 이모의 집
+    region: 동네
 characters:
   - id: haru
     name: 하루
@@ -46,3 +53,13 @@ characters:
       afternoon: bookshop
       evening: bookshop
       night: yoon-home
+  # Added 2026-10-26 for T3. Evenings at the bookshop (she orders books there), so whatever Yoon
+  # learned in the afternoon can reach her the same evening as a routine scene.
+  - id: imo
+    name: 선영
+    tier: main
+    routine:
+      morning: market
+      afternoon: cafe
+      evening: bookshop
+      night: imo-home

@@ -73,6 +73,8 @@ export interface WorldEvent {
   scene?: string;
   origin: "errand" | "scene" | "chat" | "catchup";
   taskId?: string;
+  /** Result of the consistency check against the task (llm.ts verifyEvent), when one ran. */
+  checked?: { ok: boolean; problems: string[]; retried: boolean };
 }
 
 export interface WorldState {

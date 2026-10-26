@@ -13,6 +13,10 @@ export function syncCharacter(session: ChatSession, world: World, characterId: s
   const fresh = world.factsFor(characterId, events).filter((f) => !have.has(f.text));
   if (fresh.length) session.memory = { ...session.memory, facts: [...session.memory.facts, ...fresh] };
   world.markSynced(characterId);
-  session.world = world.blockFor(characterId);
+  const block = world.blockFor(characterId);
+  session.world = block;
+  if (block.daysSinceUser > 0 && session.turns.length) {
+    session.markBoundary(`${block.daysSinceUser === 1 ? "The next day" : `${block.daysSinceUser} days later`}: day ${block.day}, ${block.slot}, at ${block.place}`);
+  }
   return fresh;
 }

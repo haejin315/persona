@@ -71,6 +71,7 @@ export class ChatSession {
   private model?: string;
   private temperature?: number;
   private filters: { repeatedOpener?: boolean };
+  private pendingBoundary?: string;
 
   constructor(opts: SessionOptions) {
     this.card = opts.card;
@@ -85,6 +86,11 @@ export class ChatSession {
       ...DEFAULT_MEMORY_CONFIG,
       ...opts.memory,
     });
+  }
+
+  /** Mark that time passed before the next user message (world/sync.ts); attached to that turn. */
+  markBoundary(label: string): void {
+    this.pendingBoundary = label;
   }
 
   /** The character's scripted first message, pushed as a turn. */
@@ -257,6 +263,10 @@ export class ChatSession {
   }
 
   private push(role: Turn["role"], content: string, meta?: Turn["meta"]): Turn {
+    if (role === "user" && this.pendingBoundary) {
+      meta = { ...(meta ?? {}), boundary: this.pendingBoundary };
+      this.pendingBoundary = undefined;
+    }
     const turn: Turn = { role, content, index: this.turns.length, ts: Date.now(), meta };
     this.turns.push(turn);
     return turn;

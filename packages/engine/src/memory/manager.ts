@@ -1,5 +1,5 @@
 import type { LLMProvider } from "../providers/types.js";
-import { toFact, type CharacterCard, type Fact, type Lang, type MemoryState, type TokenUsage, type Turn } from "../types.js";
+import { toFact, turnText, type CharacterCard, type Fact, type Lang, type MemoryState, type TokenUsage, type Turn } from "../types.js";
 
 export interface MemoryConfig {
   /** Number of most recent turns kept verbatim in the prompt. */
@@ -81,7 +81,7 @@ export class MemoryManager {
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
     const transcript = slice
-      .map((t) => `${t.role === "user" ? "User" : name}: ${t.content}`)
+      .map((t) => `${t.role === "user" ? "User" : name}: ${turnText(t)}`)
       .join("\n");
 
     const system = [

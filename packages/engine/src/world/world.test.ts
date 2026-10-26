@@ -38,6 +38,8 @@ const fakeWorldLLM = (): LLMProvider & { calls: string[] } => {
           details: ["윤이 책을 신문지에 싸 주었다", "둘째 권 표지가 조금 바랬다"],
           told: { haru: ["윤은 다음 주에 가게를 사흘 쉰다고 했다"], yoon: ["하루는 민수가 어릴 때 만화를 그렸다고 전했다"] },
         });
+      } else if (sys.includes("check a story event")) {
+        text = JSON.stringify({ ok: true, problems: [] });
       } else if (sys.includes("did an errand")) {
         text = JSON.stringify({ outcome: "done", result: "하루가 책다락에서 민수의 책을 받아 왔다.", details: ["사장님이 책을 신문지에 싸 주었다", "둘째 권 표지가 바랬다"] });
       } else {
@@ -118,6 +120,13 @@ describe("World + model + session", () => {
     expect(after).toContain("# NOW\nDay 2, morning. You are at 카페");
     expect(after).toContain("A day has passed since you last spoke with 민수");
     expect(after).toContain("책을 받아 왔다");
+    // the next user message carries the day boundary into the transcript
+    await session.send('"어제 다녀오셨어요?"');
+    const msgs = session.buildMessages();
+    const lastUser = [...msgs].reverse().find((m) => m.role === "user")!;
+    expect(lastUser.content).toMatch(/^\[The next day: day 2, morning, at 카페 '모퉁이'\]\n"어제/);
+    expect(session.turns.at(-2)!.meta?.boundary).toBeDefined();
+    expect(events[0]!.checked).toEqual({ ok: true, problems: [], retried: false });
   });
 
   it("resolves the task as a scene when another main character is at the place, and `told` lines reach only the one who heard them", async () => {
@@ -135,7 +144,37 @@ describe("World + model + session", () => {
     expect(haru.find((f) => f.source === "told")).toMatchObject({ by: "윤", text: expect.stringContaining("사흘 쉰다") });
     expect(yoon.find((f) => f.source === "told")).toMatchObject({ by: "하루", text: expect.stringContaining("만화") });
     expect(haru.some((f) => f.text.includes("만화"))).toBe(false);
-    expect(llm.calls).toHaveLength(1); // one call for the whole scene
+    expect(llm.calls).toHaveLength(2); // the scene + its check
+  });
+
+  it("runs a routine scene only when co-located characters have news, at most scenesPerDay", async () => {
+    const llm = fakeWorldLLM();
+    const w = World.create({
+      ...def,
+      places: [...def.places, { id: "market", name: "시장" }],
+      characters: [
+        ...def.characters,
+        { id: "imo", name: "이모", tier: "main", routine: { morning: "market", afternoon: "cafe", evening: "bookshop", night: "home" } },
+      ],
+    });
+    const imoCard = { ...card, id: "imo", name: { ko: "이모", ja: "おば", en: "Aunt" } };
+    const cards = { haru: card, yoon: yoonCard, imo: imoCard };
+    // Day 1: nobody knows anything yet -> no routine scene even though imo and yoon share the evening.
+    expect(await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards })).toEqual([]);
+    expect(llm.calls).toHaveLength(0);
+    // Day 2: a task scene haru x yoon in the afternoon gives yoon news; imo meets yoon in the evening.
+    w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 2, dueSlot: "afternoon", from: "민수" });
+    const events = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards });
+    expect(events.map((e) => [...e.who].sort())).toEqual([
+      ["haru", "yoon"],
+      ["imo", "yoon"],
+    ]);
+    expect(events[1]!.slot).toBe("evening");
+    // the fake scene reports told lines for haru/yoon only; the second scene's teller for yoon is imo
+    expect(w.factsFor("yoon", w.unsynced("yoon")).some((f) => f.source === "told" && f.by === "이모")).toBe(true);
+    expect(w.factsFor("imo", w.unsynced("imo")).some((f) => f.source === "witnessed")).toBe(true);
+    // haru and imo share the cafe in the afternoon but the cap (1) was spent
+    expect(llm.calls.filter((c) => c.startsWith("You write what happened"))).toHaveLength(2);
   });
 
   it("a routine day costs no calls, and a task due later today stays pending", async () => {

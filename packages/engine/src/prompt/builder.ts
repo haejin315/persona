@@ -2,6 +2,7 @@ import type { WorldBlock } from "../world/types.js";
 import {
   fillUser,
   renderFact,
+  turnText,
   type CharacterCard,
   type ChatMessage,
   type Lang,
@@ -36,7 +37,7 @@ const bullet = (items: string[], indent = "- ") =>
 const toMessages = (recent: Turn[]): ChatMessage[] =>
   recent.map((t) => ({
     role: t.role === "user" ? "user" : "assistant",
-    content: t.content,
+    content: turnText(t),
   }));
 
 /**

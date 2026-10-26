@@ -63,6 +63,8 @@ export type WorldProbe = z.infer<typeof WorldProbe>;
 const ChatPhase = z.object({
   kind: z.literal("chat"),
   characterId: z.string(),
+  /** Slot of the day the chat happens in (default: the clock's, i.e. morning after an advance). */
+  slot: z.enum(["morning", "afternoon", "evening", "night"]).optional(),
   userTurns: z.number().int().min(1),
   beats: z.array(Beat).min(1),
   probes: z.array(WorldProbe).default([]),
@@ -122,6 +124,8 @@ export interface WorldRunConfig {
   memoryModel?: string;
   /** Model for task extraction, errand resolution and scenes. Defaults to the arm's model. */
   worldModel?: string;
+  /** Model that checks a decided event against its task (default: worldModel). A small one is enough. */
+  verifierModel?: string;
   judgeModel?: string;
   outDir: string;
   /** Arm whose user turns and world the other arms replay (default: the first arm). */
@@ -205,6 +209,8 @@ export async function runWorldConversation(
   const memoryProvider = track(mem.provider, "memory");
   const wl = chat.provider.id === "fake" || !cfg.worldModel ? chat : resolveProvider(cfg.worldModel);
   const worldLLM = { provider: track(wl.provider, "world"), model: wl.model };
+  const vf = chat.provider.id === "fake" || !cfg.verifierModel ? wl : resolveProvider(cfg.verifierModel);
+  const verifierLLM = { provider: track(vf.provider, "world"), model: vf.model };
   const sim = chat.provider.id === "fake" || !cfg.simulatorModel ? chat : resolveProvider(cfg.simulatorModel);
   const simProvider = track(sim.provider, "simulator");
 
@@ -234,7 +240,7 @@ export async function runWorldConversation(
       } else {
         const memories: Record<string, MemoryState> = {};
         for (const [cid, s] of sessions) memories[cid] = s.memory;
-        for (let d = 0; d < p.days; d++) events.push(...(await advanceDay(world, { llm: worldLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu })));
+        for (let d = 0; d < p.days; d++) events.push(...(await advanceDay(world, { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu })));
       }
       addUsage(usage.world, { promptTokens: wu.promptTokens, completionTokens: wu.completionTokens, cachedPromptTokens: wu.cachedPromptTokens }, wu.model);
       usage.world.calls += wu.calls - 1; // addUsage counted one call
@@ -243,6 +249,7 @@ export async function runWorldConversation(
       continue;
     }
 
+    if (p.slot) world.setClock(world.day, p.slot);
     const card = cards[p.characterId] ?? findCharacter(p.characterId);
     let session = sessions.get(p.characterId);
     if (!session) {
