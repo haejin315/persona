@@ -69,6 +69,28 @@ describe("World (code only)", () => {
     expect(w.whoElseAt("cafe", 2, "afternoon", "haru")).toEqual([]);
   });
 
+  it("the same outing asked for twice is one task; a task at the routine place is dropped", async () => {
+    const w = World.create(def);
+    const a = w.addTask({ assignee: "haru", what: "민수 책 받아 오기", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "민수" });
+    const b = w.addTask({ assignee: "haru", what: "이모 책 받아 오기", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "이모" });
+    expect(b).toBe(a);
+    expect(w.state.tasks).toHaveLength(1);
+    expect(a.what).toBe("민수 책 받아 오기 / 이모 책 받아 오기");
+    const llm = {
+      id: "fake",
+      defaultModel: "fake-1",
+      async generate() {
+        return { text: JSON.stringify({ tasks: [{ what: "7시에 카페 문 열기", where: "cafe", dueDay: 2, dueSlot: "morning" }, { what: "책", where: "bookshop", dueDay: 2, dueSlot: "afternoon" }] }), model: "fake-1", latencyMs: 1 };
+      },
+      async *stream() {
+        yield "";
+      },
+    };
+    const card = findCharacter("haru");
+    const found = await extractTasks({ provider: llm }, { world: w, card, lang: "ko", persona: { name: "민수" }, turns: [], characterId: "haru" });
+    expect(found.map((t) => t.what)).toEqual(["책"]);
+  });
+
   it("recording an event closes its task and facts carry the ledger's source", () => {
     const w = World.create(def);
     const t = w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 2, from: "민수" });
@@ -191,8 +213,10 @@ describe("World + model + session", () => {
     w.addTask({ assignee: "haru", what: "민수 책", where: "bookshop", dueDay: 1, dueSlot: "afternoon", from: "민수" });
     const events = await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card } });
     expect(events).toHaveLength(1);
-    expect(w.state.tasks.map((t) => t.status)).toEqual(["done", "done"]);
-    expect(w.state.tasks.map((t) => t.eventId)).toEqual([events[0]!.id, events[0]!.id]);
+    // addTask already merged them; the grouping in advanceDay covers tasks that differ in slot text
+    expect(w.state.tasks.map((t) => t.status)).toEqual(["done"]);
+    expect(w.state.tasks[0]!.what).toBe("이모 책 / 민수 책");
+    expect(w.state.tasks.map((t) => t.eventId)).toEqual([events[0]!.id]);
     expect(llm.calls.filter((c) => c.startsWith("You decide what happened"))).toHaveLength(1);
   });
 

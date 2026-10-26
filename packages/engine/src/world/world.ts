@@ -107,6 +107,12 @@ export class World {
   }
 
   addTask(t: Omit<WorldTask, "id" | "status" | "createdDay">): WorldTask {
+    // The same outing asked for twice (the user repeats the errand in a later chat) is one task.
+    const same = this.state.tasks.find((x) => x.status === "pending" && x.assignee === t.assignee && x.where === t.where && x.dueDay === t.dueDay);
+    if (same) {
+      if (!same.what.includes(t.what) && !t.what.includes(same.what)) same.what = `${same.what} / ${t.what}`;
+      return same;
+    }
     const task: WorldTask = { ...t, id: `task-${this.state.tasks.length + 1}`, status: "pending", createdDay: this.day };
     this.state.tasks.push(task);
     return task;

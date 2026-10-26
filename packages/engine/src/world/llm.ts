@@ -62,12 +62,16 @@ export async function extractTasks(
   const { world, card, lang, persona, turns, characterId } = args;
   const name = card.name[lang] ?? card.id;
   const transcript = turns.map((t) => `${t.role === "user" ? persona.name : name}: ${t.content}`).join("\n");
+  const pending = world.state.tasks.filter((t) => t.status === "pending" && t.assignee === characterId);
   const system = [
     `You read a roleplay conversation between ${persona.name} (the user) and the character ${name} and list what ${name} AGREED to do later, away from this conversation.`,
+    pending.length ? `ALREADY RECORDED (do not list these again, even if the conversation mentions them):\n${pending.map((t) => `- ${t.what} @${t.where ?? "?"} day ${t.dueDay}`).join("\n")}` : "",
     `Today is day ${world.day}. Places in this world (use the id):\n${placesList(world)}`,
     `Output JSON only: {"tasks": [{"what": "one line: what ${name} will do and for whom, with every concrete detail needed to do it (titles, names, what to check), written in ${LANG_NAME[lang]}", "where": "place id or null", "dueDay": <day number>, "dueSlot": "morning|afternoon|evening|night"}]}`,
-    `Rules: include only commitments ${name} clearly accepted (a request ${name} declined or left open is not a task). "tomorrow" is day ${world.day + 1}; an unspecified day is day ${world.day + 1}. A task is something ${name} does AWAY from ${persona.name}, where ${persona.name} cannot see it: going somewhere, asking someone, fetching or checking something. Anything ${name} will do the next time ${persona.name} is present (hand something over, tell them a result, make their drink a certain way, bring up a topic) is NOT a task - it happens in the conversation itself. Things done inside this same conversation are not tasks. Empty list if none.`,
-  ].join("\n");
+    `Rules: include only NEW commitments ${name} clearly accepted (a request ${name} declined or left open is not a task). "tomorrow" is day ${world.day + 1}; an unspecified day is day ${world.day + 1}. A task is something ${name} does AWAY from ${persona.name}, where ${persona.name} cannot see it: going somewhere, asking someone, fetching or checking something. Anything ${name} will do the next time ${persona.name} is present (hand something over, tell them a result, make their drink a certain way, bring up a topic, open the shop) is NOT a task - it happens in the conversation itself. Things done inside this same conversation are not tasks. Empty list if none.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
   const res = await llm.provider.generate(
     [
       { role: "system", content: system },
@@ -86,6 +90,8 @@ export async function extractTasks(
     const where = typeof o.where === "string" && world.state.places.some((p) => p.id === o.where) ? o.where : undefined;
     const dueDay = typeof o.dueDay === "number" && o.dueDay >= world.day ? Math.floor(o.dueDay) : world.day + 1;
     const dueSlot = SLOTS.includes(o.dueSlot as Slot) ? (o.dueSlot as Slot) : undefined;
+    // Being at one's own routine place is not an errand ("open the café at 7").
+    if (where && dueSlot && world.character(characterId).routine[dueSlot] === where) continue;
     out.push({ assignee: characterId, what: o.what.trim(), where, dueDay, dueSlot, from: persona.name });
   }
   return out;

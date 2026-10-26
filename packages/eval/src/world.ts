@@ -318,7 +318,9 @@ export async function runWorldConversation(
     }
     world.sawUser(p.characterId);
     if (!source) {
-      const at = world.whereIs(p.characterId) ?? world.state.places[0]!.id;
+      // The user met the character where the routine puts them; a pending errand's place is where
+      // they would have been, which is exactly what the chat prevented (T4).
+      const at = world.character(p.characterId).routine[world.slot] ?? world.whereIs(p.characterId) ?? world.state.places[0]!.id;
       world.recordChat(p.characterId, scenario.persona.name, at);
     }
     phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks });
