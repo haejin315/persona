@@ -409,16 +409,13 @@ export async function catchUp(world: World, deps: AdvanceDeps & { recentDays?: n
   while (d <= spanUntil) {
     const to = Math.min(d + spanDays - 1, spanUntil);
     for (const e of await generateSpan(world, deps, d, to, usage)) events.push(world.record(e));
-    // tasks due in the span still resolve (they are rare while the user is away)
+    // tasks due inside the span are lived like any other day's (scene when the other main is there)
     for (let x = d; x <= to; x++) {
       world.setClock(x, "night");
-      for (const t of world.dueTasks(x)) {
-        const slot = t.dueSlot ?? "afternoon";
-        const where = t.where ?? world.whereIs(t.assignee, t.dueDay, slot);
-        const card = deps.cards[t.assignee];
-        if (!card) continue;
-        events.push(settle(world, [t], await resolveTask(deps.llm, { world, card, lang: deps.lang, task: t, memory: knowledgeOf(world, t.assignee, deps.memories) }, usage)));
-        void where;
+      const met = new Set<string>();
+      for (const group of dueGroups(world, x).values()) {
+        const ev = await liveTask(world, deps, group, usage, met);
+        if (ev) events.push(ev);
       }
     }
     inSpans += to - d + 1;
@@ -517,6 +514,97 @@ async function recordScene(world: World, deps: AdvanceDeps, scene: SceneResult, 
   return ev;
 }
 
+const pairKey = (a: string, b: string) => [a, b].sort().join("+");
+
+/** One outing per (character, place, slot): two errands at the same shop are one visit, not two scenes in the same hour (T3 first run). */
+function dueGroups(world: World, day: number): Map<string, WorldTask[]> {
+  const groups = new Map<string, WorldTask[]>();
+  for (const t of world.dueTasks(day)) {
+    const slot = t.dueSlot ?? "afternoon";
+    const where = t.where ?? world.whereIs(t.assignee, t.dueDay, slot) ?? "?";
+    const key = `${t.assignee}|${where}|${t.dueDay}|${slot}`;
+    groups.set(key, [...(groups.get(key) ?? []), t]);
+  }
+  return groups;
+}
+
+/**
+ * Live one outing: deferred when the user had the character in that slot (docs/10 T4), a scene when
+ * another main character is at the place (both witness it), otherwise alone and checked against the
+ * errand. Used for days lived one by one and for days inside a span alike (T6b: a span resolved the
+ * handover alone, so Yoon never knew he had given the books away).
+ */
+async function liveTask(world: World, deps: AdvanceDeps, group: WorldTask[], usage: WorldCallUsage, met: Set<string>): Promise<WorldEvent | undefined> {
+  const task: WorldTask = group.length === 1 ? group[0]! : { ...group[0]!, what: group.map((t) => t.what).join(" / ") };
+  // The user wins the slot (docs/10 T4): a character who spent it with the user did not go. The
+  // errand moves to the same slot next day and the character remembers why.
+  const chat = world.withUser(task.assignee, task.dueDay, task.dueSlot ?? "afternoon");
+  if (chat) {
+    const name = deps.cards[task.assignee]?.name[deps.lang] ?? task.assignee;
+    const placeName = task.where ? world.place(task.where).name : "the errand";
+    const due = task.dueDay;
+    for (const t of group) t.dueDay = due + 1;
+    return world.record({
+        day: due,
+        slot: task.dueSlot ?? "afternoon",
+        where: chat.where,
+        who: [task.assignee],
+        scope: "personal",
+        result: `${name} did not go to ${placeName} that ${task.dueSlot ?? "afternoon"}: ${deps.persona?.name ?? "the user"} was there with ${name}, so the errand (${task.what}) moved to the next day`,
+        details: [],
+        knownBy: { [task.assignee]: { source: "witnessed" } },
+        origin: "catchup",
+      // not taskId: the task stays pending
+    });
+  }
+  const finish = (ev: WorldEvent) => {
+    for (const t of group) {
+      if (t.status === "pending") t.status = "done";
+      t.eventId = ev.id;
+    }
+  };
+  const slot = task.dueSlot ?? "afternoon";
+  const where = task.where ?? world.whereIs(task.assignee, task.dueDay, slot);
+  const card = deps.cards[task.assignee];
+  if (!card) throw new Error(`advanceDay: no card for ${task.assignee}`);
+  const others = where
+    ? world.whoElseAt(where, task.dueDay, slot, task.assignee).filter((id) => world.character(id).tier === "main" && deps.cards[id])
+    : [];
+  if (others.length && where) {
+    const otherId = others[0]!;
+    const scene = await runScene(
+      deps.llm,
+      {
+        world,
+        lang: deps.lang,
+        a: { id: task.assignee, card, memory: knowledgeOf(world, task.assignee, deps.memories), task },
+        b: { id: otherId, card: deps.cards[otherId]!, memory: knowledgeOf(world, otherId, deps.memories) },
+        where,
+        day: task.dueDay,
+        slot,
+        persona: deps.persona,
+      },
+      usage,
+    );
+    const ev = await recordScene(world, deps, scene, task.assignee, otherId, slot, where, task.dueDay, usage, task);
+    finish(ev);
+    met.add(pairKey(task.assignee, otherId));
+    return ev;
+  } else {
+    let r = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories) }, usage);
+    if (deps.verifier !== null) {
+      const check = await verifyEvent(deps.verifier ?? deps.llm, { task, event: r.event }, usage);
+      let retried = false;
+      if (!check.ok) {
+        retried = true;
+        r = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories), avoid: check.problems }, usage);
+      }
+      r = { ...r, event: { ...r.event, checked: { ...check, retried } } };
+    }
+    return settle(world, group, r);
+  }
+}
+
 /**
  * Move the world forward one day and live through the day that ended. Every task due by then is
  * resolved: as a scene when another main character is at the task's place in its slot, otherwise
@@ -530,92 +618,13 @@ export async function advanceDay(world: World, deps: AdvanceDeps): Promise<World
   const day = world.day - 1;
   const events: WorldEvent[] = [];
   const met = new Set<string>();
-  const pairKey = (a: string, b: string) => [a, b].sort().join("+");
 
   // The world's own events for the day that ended (none unless eventsPerDay > 0).
   for (const e of await generateDay(world, deps, day, usage)) events.push(world.record(e));
 
-  // One outing per (character, place, slot): two errands at the same shop are one visit, not two
-  // scenes in the same hour (T3 first run: the aunt's book and the user's book became two scenes).
-  const groups = new Map<string, WorldTask[]>();
-  for (const t of world.dueTasks(day)) {
-    const slot = t.dueSlot ?? "afternoon";
-    const where = t.where ?? world.whereIs(t.assignee, t.dueDay, slot) ?? "?";
-    const key = `${t.assignee}|${where}|${t.dueDay}|${slot}`;
-    groups.set(key, [...(groups.get(key) ?? []), t]);
-  }
-  for (const group of groups.values()) {
-    const task: WorldTask = group.length === 1 ? group[0]! : { ...group[0]!, what: group.map((t) => t.what).join(" / ") };
-    // The user wins the slot (docs/10 T4): a character who spent it with the user did not go. The
-    // errand moves to the same slot next day and the character remembers why.
-    const chat = world.withUser(task.assignee, task.dueDay, task.dueSlot ?? "afternoon");
-    if (chat) {
-      const name = deps.cards[task.assignee]?.name[deps.lang] ?? task.assignee;
-      const placeName = task.where ? world.place(task.where).name : "the errand";
-      const due = task.dueDay;
-      for (const t of group) t.dueDay = due + 1;
-      events.push(
-        world.record({
-          day: due,
-          slot: task.dueSlot ?? "afternoon",
-          where: chat.where,
-          who: [task.assignee],
-          scope: "personal",
-          result: `${name} did not go to ${placeName} that ${task.dueSlot ?? "afternoon"}: ${deps.persona?.name ?? "the user"} was there with ${name}, so the errand (${task.what}) moved to the next day`,
-          details: [],
-          knownBy: { [task.assignee]: { source: "witnessed" } },
-          origin: "catchup",
-          // not taskId: the task stays pending
-        }),
-      );
-      continue;
-    }
-    const finish = (ev: WorldEvent) => {
-      for (const t of group) {
-        if (t.status === "pending") t.status = "done";
-        t.eventId = ev.id;
-      }
-    };
-    const slot = task.dueSlot ?? "afternoon";
-    const where = task.where ?? world.whereIs(task.assignee, task.dueDay, slot);
-    const card = deps.cards[task.assignee];
-    if (!card) throw new Error(`advanceDay: no card for ${task.assignee}`);
-    const others = where
-      ? world.whoElseAt(where, task.dueDay, slot, task.assignee).filter((id) => world.character(id).tier === "main" && deps.cards[id])
-      : [];
-    if (others.length && where) {
-      const otherId = others[0]!;
-      const scene = await runScene(
-        deps.llm,
-        {
-          world,
-          lang: deps.lang,
-          a: { id: task.assignee, card, memory: knowledgeOf(world, task.assignee, deps.memories), task },
-          b: { id: otherId, card: deps.cards[otherId]!, memory: knowledgeOf(world, otherId, deps.memories) },
-          where,
-          day: task.dueDay,
-          slot,
-          persona: deps.persona,
-        },
-        usage,
-      );
-      const ev = await recordScene(world, deps, scene, task.assignee, otherId, slot, where, task.dueDay, usage, task);
-      finish(ev);
-      events.push(ev);
-      met.add(pairKey(task.assignee, otherId));
-    } else {
-      let r = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories) }, usage);
-      if (deps.verifier !== null) {
-        const check = await verifyEvent(deps.verifier ?? deps.llm, { task, event: r.event }, usage);
-        let retried = false;
-        if (!check.ok) {
-          retried = true;
-          r = await resolveTask(deps.llm, { world, card, lang: deps.lang, task, memory: knowledgeOf(world, task.assignee, deps.memories), avoid: check.problems }, usage);
-        }
-        r = { ...r, event: { ...r.event, checked: { ...check, retried } } };
-      }
-      events.push(settle(world, group, r));
-    }
+  for (const group of dueGroups(world, day).values()) {
+    const ev = await liveTask(world, deps, group, usage, met);
+    if (ev) events.push(ev);
   }
 
   // Routine scenes: co-located main characters with something to tell, capped per day. Where a

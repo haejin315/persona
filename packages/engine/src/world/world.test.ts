@@ -324,6 +324,19 @@ describe("World + model + session", () => {
     expect(w.factsFor("haru", w.unsynced("haru")).map((f) => f.day)).toEqual([1, 1, 1, 2, 2, 2]);
   });
 
+  it("an errand due inside a span is a scene when the other main is there, so both remember it", async () => {
+    const llm = fakeWorldLLM();
+    const w = World.create(def);
+    w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 5, dueSlot: "afternoon", from: "민수" });
+    const r = await catchUp(w, { llm: { provider: llm }, lang: "ko", cards: { haru: card, yoon: yoonCard }, eventsPerDay: 0, recentDays: 7, spanDays: 30 }, 40);
+    const scene = r.events.find((e) => e.origin === "scene");
+    expect(scene).toBeDefined();
+    expect(scene!.day).toBe(5);
+    expect(Object.keys(scene!.knownBy).sort()).toEqual(["haru", "yoon"]);
+    expect(w.state.tasks[0]!.status).toBe("done");
+    expect(w.factsFor("yoon", w.unsynced("yoon")).some((f) => f.day === 5 && f.source === "witnessed")).toBe(true);
+  });
+
   it("a witness keeps the details of errands and of the last days; an older ordinary day keeps its result only", () => {
     const w = World.create(def);
     const t = w.addTask({ assignee: "haru", what: "책", where: "bookshop", dueDay: 1, from: "민수" });
