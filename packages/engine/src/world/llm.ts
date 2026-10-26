@@ -241,7 +241,7 @@ export async function runScene(
     args.persona
       ? `# THE USER\n${args.persona.name} is not present${args.userBackDay ? ` and will not be back before day ${args.userBackDay}` : ""}. ${args.persona.description ?? ""} Characters may mention ${args.persona.name} only from what they know above. Nothing can be handed to, told to or arranged with ${args.persona.name} before they are back, so do not plan it for a nearer day.`
       : "",
-    `Output JSON only: {"scene": "the scene, 6 to 14 short lines in the *action* \\"speech\\" format, in character for both", "result": "ONE sentence, past tense: what is now true after this meeting", "details": ["2 to 4 concrete things both would remember"], "told": {"${a.id}": ["facts ${nameOf(b)} told ${nameOf(a)} that ${nameOf(a)} did not know - one line each, attributed ('${nameOf(b)} said ...')"], "${b.id}": ["facts ${nameOf(a)} told ${nameOf(b)} that ${nameOf(b)} did not know"]}}`,
+    `Output JSON only: {"scene": "the scene, 6 to 14 short lines in the *action* \\"speech\\" format, in character for both", "result": "ONE sentence, past tense: what is now true after this meeting", "details": ["2 to 4 concrete things both would remember"], "told": {"${a.id}": ["facts ${nameOf(b)} told ${nameOf(a)} that ${nameOf(a)} did not know - one line each, attributed ('${nameOf(b)} said ...'); start the line with [about ${args.persona?.name ?? "the user"}] when it concerns ${args.persona?.name ?? "the user"}'s belongings or a promise to them"], "${b.id}": ["facts ${nameOf(a)} told ${nameOf(b)} that ${nameOf(b)} did not know, same rules"]}}`,
     "Rules: each character says only what they know and would say given their personality and secrets (a reserved character shares little). Nothing dramatic. If a task brought one of them, the scene resolves it plainly. In \"result\", \"details\" and \"told\", date things by weekday or \"day N\", never by 어제/오늘/내일 (yesterday/today/tomorrow): these lines are read days later.",
   ]
     .filter(Boolean)
@@ -485,7 +485,9 @@ export function newsFor(world: World, a: string, b: string, day: number, slot: S
   ledger.forEach((e, i) => {
     if (e.who.includes(a) && e.who.includes(b)) lastMet = i;
   });
-  return ledger.slice(lastMet + 1).filter((e) => before(e) && e.knownBy[a] && !e.knownBy[b]);
+  // A rumour is not knowing: a witness still has news for someone who only heard around (T9).
+  const knows = (e: WorldEvent, id: string) => !!e.knownBy[id] && e.knownBy[id]!.source !== "rumor";
+  return ledger.slice(lastMet + 1).filter((e) => before(e) && knows(e, a) && !knows(e, b));
 }
 
 function hasNews(world: World, a: string, b: string, day: number, slot: Slot): boolean {
@@ -548,8 +550,11 @@ async function recordScene(world: World, deps: AdvanceDeps, scene: SceneResult, 
   for (const [id, lines] of Object.entries(learned)) {
     const teller = id === aId ? bId : aId;
     const by = deps.cards[teller]!.name[deps.lang] ?? teller;
-    for (const line of lines) {
-      world.record({ day, slot, where, who: [aId, bId], scope: "personal", result: line, details: [], knownBy: { [id]: { source: "told", by } }, origin: "scene" });
+    for (const raw of lines) {
+      const m = raw.match(/^\[about [^\]]*\]\s*/);
+      const line = m ? raw.slice(m[0].length) : raw;
+      if (!line.trim()) continue;
+      world.record({ day, slot, where, who: [aId, bId], scope: "personal", result: line, details: [], knownBy: { [id]: { source: "told", by } }, origin: "scene", ...(m ? { aboutUser: true } : {}) });
     }
   }
   return ev;

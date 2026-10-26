@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findCharacter } from "../characters.js";
 import type { LLMProvider } from "../providers/types.js";
 import { ChatSession } from "../session.js";
-import { advanceDay, catchUp, extractTasks } from "./llm.js";
+import { advanceDay, catchUp, extractTasks, newsFor } from "./llm.js";
 import { syncCharacter } from "./sync.js";
 import { World, type WorldFile } from "./world.js";
 
@@ -38,7 +38,7 @@ const fakeWorldLLM = (opts: { errand?: "done" | "failed" } = {}): LLMProvider & 
           scene: '*문이 열린다.* "안녕하세요."',
           result: "하루가 윤에게서 민수의 책을 받아 왔다.",
           details: ["윤이 책을 신문지에 싸 주었다", "둘째 권 표지가 조금 바랬다"],
-          told: { haru: ["윤은 다음 주에 가게를 사흘 쉰다고 했다"], yoon: ["하루는 민수가 어릴 때 만화를 그렸다고 전했다"] },
+          told: { haru: ["윤은 다음 주에 가게를 사흘 쉰다고 했다"], yoon: ["[about 민수] 하루는 민수가 어릴 때 만화를 그렸다고 전했다"] },
         });
       } else if (sys.includes("Decide what, if anything, happened on day")) {
         const day = Number(sys.match(/happened on day (\d+)/)?.[1] ?? 0);
@@ -225,6 +225,10 @@ describe("World + model + session", () => {
     expect(events[1]!.slot).toBe("evening");
     // the fake scene reports told lines for haru/yoon only; the second scene's teller for yoon is imo
     expect(w.factsFor("yoon", w.unsynced("yoon")).some((f) => f.source === "told" && f.by === "이모")).toBe(true);
+    // a told line marked [about 민수] becomes a fact about the user's things, without the mark in its text
+    const marked = w.factsFor("yoon", w.unsynced("yoon")).find((f) => f.source === "told" && f.about === "user");
+    expect(marked?.text).toMatch(/하루는 민수가 어릴 때 만화를 그렸다고 전했다$/);
+    expect(marked?.text).not.toContain("[about");
     expect(w.factsFor("imo", w.unsynced("imo")).some((f) => f.source === "witnessed")).toBe(true);
     // haru and imo share the cafe in the afternoon but the cap (1) was spent
     expect(llm.calls.filter((c) => c.startsWith("You write what happened"))).toHaveLength(2);
@@ -371,6 +375,9 @@ describe("World + model + session", () => {
     expect(notice.knownBy.kael).toBeUndefined(); // another region
     expect(w.state.ledger[1]!.knownBy.yoon).toBeUndefined(); // personal events do not spread
     expect(w.factsFor("yoon", w.unsynced("yoon")).map((f) => f.source)).toContain("rumor");
+    // a rumour is not knowing: the witness still has this as news for yoon, and yoon has nothing for the witness
+    expect(newsFor(w, "imo", "yoon", 3, "morning").map((e) => e.result)).toContain("단수 안내문이 붙었다");
+    expect(newsFor(w, "yoon", "imo", 3, "morning")).toEqual([]);
     // the afternoon scene haru x imo (both have news) carried the what-to-tell lists
     const scene = llm.systems.find((x) => x.startsWith("You write what happened"));
     expect(scene).toBeDefined();
@@ -388,8 +395,10 @@ describe("World + model + session", () => {
 
   it("what happened to the user's things is a marked fact, and the character is told to raise it unasked", () => {
     const w = World.create(def);
-    w.record({ day: 1, slot: "evening", where: "bookshop", who: ["haru"], scope: "personal", result: "수도관이 터졌다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "catchup", userEffects: { "민수의 책": "1권 표지가 젖었다" } });
+    w.record({ day: 1, slot: "evening", where: "bookshop", who: ["haru"], scope: "personal", result: "수도관이 터졌다", details: [], knownBy: { haru: { source: "witnessed" }, yoon: { source: "rumor" } }, origin: "catchup", userEffects: { "민수의 책": "1권 표지가 젖었다" } });
     expect(w.state.user).toEqual({ "민수의 책": "1권 표지가 젖었다" });
+    // someone who only heard around gets the event, not what it did to the user's things
+    expect(w.factsFor("yoon", w.unsynced("yoon")).some((f) => f.about === "user")).toBe(false);
     const facts = w.factsFor("haru", w.unsynced("haru"));
     expect(facts.find((f) => f.about === "user")).toMatchObject({ text: "민수의 책: 1권 표지가 젖었다", source: "witnessed", day: 1 });
     const session = new ChatSession({ card, lang: "ko", provider: fakeWorldLLM(), persona: { name: "민수" }, memory: { enabled: false } });

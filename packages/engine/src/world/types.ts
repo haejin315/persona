@@ -92,6 +92,8 @@ export interface WorldEvent {
    * world may not act for the user, but things can happen to what the user owns.
    */
   userEffects?: Record<string, string | null>;
+  /** A told line that concerns the user's things or a promise to the user (the scene writer marks it): the listener's fact is marked too. */
+  aboutUser?: boolean;
 }
 
 export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;

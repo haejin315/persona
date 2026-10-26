@@ -202,11 +202,12 @@ export class World {
     for (const e of events) {
       const k = e.knownBy[characterId]!;
       const src = { source: k.source, ...(k.by ? { by: k.by } : {}), day: e.day } as const;
-      out.push({ text: `${e.slot}, ${this.place(e.where).name}: ${e.result}`, ...src });
+      out.push({ text: `${e.slot}, ${this.place(e.where).name}: ${e.result}`, ...src, ...(e.aboutUser ? { about: "user" as const } : {}) });
       // A witness remembers the details (of errands always, of ordinary days for a while); someone who was told gets the result only.
       if (k.source === "witnessed" && (e.taskId || this.day - e.day <= this.detailDays)) for (const d of e.details) out.push({ text: d, ...src });
-      // What happened to the user's things is a marked fact for everyone who knows of the event.
-      for (const [label, state] of Object.entries(e.userEffects ?? {})) if (state) out.push({ text: `${label}: ${state}`, ...src, about: "user" });
+      // What happened to the user's things is a marked fact for those who saw it or were told; a rumour
+      // carries no such detail (T9: Haru "heard around" the state of the user's book and then claimed she was there).
+      if (k.source !== "rumor") for (const [label, state] of Object.entries(e.userEffects ?? {})) if (state) out.push({ text: `${label}: ${state}`, ...src, about: "user" });
     }
     return out;
   }
