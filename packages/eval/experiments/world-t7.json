@@ -1,0 +1,16 @@
+{
+  "scenarioId": "t7-cascade",
+  "arms": [
+    { "id": "news/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "sceneNews": true },
+    { "id": "plain/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "sceneNews": false }
+  ],
+  "repeats": 2,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "verifierModel": "claude-cli:haiku",
+  "judgeModel": "claude-cli:opus",
+  "eventsPerDay": 2,
+  "replayArmId": "none",
+  "outDir": "eval-results/world-t7"
+}

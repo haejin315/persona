@@ -1,0 +1,123 @@
+# T7 · 연쇄 (docs/10 test ladder). A regional event has consequences, the consequences have
+# consequences, and the world must stop within the per-day cap. Day 1 (Monday) morning: an ordinary
+# chat with Haru; the user says he is away until Thursday. Day 1 afternoon (scripted, regional): a
+# notice at the market says the alley's water is cut from Tuesday morning to Wednesday evening for
+# pipe work; Sunyoung sees it. Three days pass with the world allowed two events a day. Day 4
+# (Thursday): Haru, then Yoon, are asked what happened. Measured: events per day stay under the cap
+# and the place conditions are back to normal by Thursday; Haru's and Yoon's accounts agree with the
+# ledger and with each other; how much of the café's side reaches Yoon through Sunyoung (second hop).
+# The arms differ only in whether scenes get a "what to bring up" list (sceneNews).
+id: t7-cascade
+world: haru-town
+lang: ko
+persona:
+  name: 민수
+  description: 28살, 작은 디자인 회사에 올해 들어온 신입. 몇 달째 아침마다 카페 '모퉁이'에 오는 단골. 하루와는 서로 이름을 알고 가벼운 농담을 주고받는 사이.
+userStyle: >
+  존댓말. 짧게 1~2문장으로 말하고, 지문은 세 번에 한 번 정도 짧게 쓴다. 감정보다 상황을 말한다.
+  하루가 전에 한 말을 가끔 되짚어 말한다.
+seedMemory:
+  haru:
+    summary: >
+      민수는 몇 달 동안 매일 아침 7시쯤 와서 아메리카노를 마시는 단골이다. 서로 이름을 알게 된 뒤로 주문 외의 대화를 조금씩 주고받는다.
+    facts:
+      - { text: "민수의 이름은 민수다", source: user }
+      - { text: "민수는 디자인 회사에 올해 들어온 신입이다", source: user }
+      - { text: "민수는 고양이 보리를 키운다", source: user }
+      - { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: user }
+    relationship:
+      stage: friendly
+      notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
+  yoon:
+    summary: >
+      민수는 몇 번 들른 손님이다. 지난주에 옛 만화책 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다.
+      하루는 카페 '모퉁이'의 바리스타로 이모 선영이 주문한 책을 받아 가려고 가끔 들른다. 선영은 저녁마다 들러 책을 주문하고 동네 얘기를 한다.
+    facts:
+      - { text: "민수는 지난주에 『달빛 고양이』 단행본 두 권을 찾아 달라고 부탁하고 책값을 미리 냈다", source: user }
+      - { text: "하루는 카페 '모퉁이'의 바리스타이고 이모 선영이 주문한 책을 받아 가려고 가끔 들른다", source: witnessed }
+      - { text: "선영은 카페 '모퉁이'의 주인이고 저녁마다 책다락에 들러 책을 주문하고 동네 얘기를 한다", source: witnessed }
+    relationship:
+      stage: acquaintance
+      notes: ["책을 찾아 달라고 부탁한 손님"]
+  imo:
+    summary: >
+      민수는 아침 단골이라 얼굴과 아메리카노 주문은 안다. 선영은 아침에 시장을 보고 오후에 카페를 보고 저녁마다 책다락에 들러 윤 사장과 동네 얘기를 한다.
+    facts:
+      - { text: "아침 단골 손님(민수)은 매일 아메리카노를 마신다", source: witnessed }
+    relationship:
+      stage: initial
+      notes: ["아침 단골, 몇 번 마주친 정도"]
+phases:
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 3
+    beats:
+      - fromUserTurn: 1
+        goal: 월요일 아침, 평소처럼 커피를 주문하며 인사한다. 화요일부터 사흘 회사 워크숍이라 목요일 아침에나 온다고 말한다. 부탁은 하지 않는다.
+        reveal:
+          - 민수는 화요일부터 사흘 회사 워크숍에 가고 목요일 아침에 돌아온다
+  - kind: event
+    slot: afternoon
+    where: market
+    who: [imo]
+    scope: regional
+    result: "월요일(day 1) 오후, 동네 시장 입구와 골목 전봇대에 '노후 수도관 교체 공사로 화요일(day 2) 아침 9시부터 수요일(day 3) 저녁 6시까지 골목 일대 단수' 안내문이 붙었다."
+    details:
+      - "안내문은 구청 상수도과 이름으로 붙었고, 수요일 오전에 비상 급수차가 시장 입구에 온다고 적혀 있었다"
+      - "선영이 안내문을 휴대폰으로 찍어 두었다"
+      - "시장 두부 가게 주인이 화요일은 아예 쉬겠다고 했다"
+    knownBy:
+      imo: witnessed
+    effects:
+      market: "입구에 '화요일 9시~수요일 18시 골목 단수' 안내문이 붙어 있음. 수요일 오전 비상 급수차 예정."
+  - kind: advance
+    days: 1
+  - kind: advance
+    days: 1
+  - kind: advance
+    days: 1
+  - kind: chat
+    characterId: haru
+    slot: morning
+    userTurns: 5
+    beats:
+      - fromUserTurn: 1
+        goal: 목요일 아침, 워크숍에서 돌아와 평소처럼 인사하고 커피를 주문한다. 사흘 동안 동네에 무슨 일 없었는지 묻는다.
+      - fromUserTurn: 2
+        goal: 하루가 말한 일에 대해 세부를 캐묻는다(가게는 어떻게 했는지, 누구한테 들었는지). 답을 암시하지 않는다. 그 뒤 출근한다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 사흘 동안 동네에 무슨 일 없었는지 묻는다
+        expected: "@ledger (the water cut and what it did to the café, as the ledger records Haru witnessing or being told)"
+      - atUserTurn: 2
+        kind: recall
+        ask: 가게는 어떻게 했는지, 누구한테 들었는지 캐묻는다
+        expected: "@ledger (how the café handled the days without water, with the source when she was told)"
+      - atUserTurn: 4
+        kind: negative
+        ask: 더 캐묻는다 (손님들 반응, 공사 자체, 다른 가게)
+        expected: "@ledger (nothing beyond what Haru witnessed or was told; the ledger is the limit)"
+  - kind: chat
+    characterId: yoon
+    slot: afternoon
+    userTurns: 4
+    beats:
+      - fromUserTurn: 1
+        goal: 같은 날 오후, 책다락에 들러 인사한다. 단수 때 가게는 어땠는지 묻는다.
+      - fromUserTurn: 2
+        goal: 카페 '모퉁이'는 그동안 어땠다고 들었는지 묻는다. 그 뒤 별일 없었는지 묻고 간다.
+    probes:
+      - atUserTurn: 1
+        kind: recall
+        ask: 단수 때 가게는 어땠는지 묻는다
+        expected: "@ledger (what the water cut was for the bookshop in Yoon's own record: witnessed, told by 선영, or heard around)"
+      - atUserTurn: 2
+        kind: recall
+        ask: 카페 '모퉁이'는 그동안 어땠다고 들었는지 묻는다
+        expected: "@ledger (what reached Yoon about the café during those days, with who told him; if the ledger holds nothing about the café for him, saying he did not hear is the right answer)"
+      - atUserTurn: 3
+        kind: negative
+        ask: 그 밖에 별일 없었는지 묻는다
+        expected: "@ledger (only what the ledger holds for Yoon; a quiet answer is fine, an invented one is not)"
