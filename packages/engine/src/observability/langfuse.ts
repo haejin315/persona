@@ -151,6 +151,9 @@ export function observedProvider<P extends LLMProvider>(provider: P, trace: Trac
   const wrapped: LLMProvider = {
     id: provider.id,
     defaultModel: provider.defaultModel,
+    // Start-up overlap and its clean-up are the provider's own business; pass them through (docs/11).
+    ...(provider.prewarm ? { prewarm: (m: ChatMessage[], o?: GenerateOptions) => provider.prewarm!(m, o) } : {}),
+    ...(provider.dispose ? { dispose: () => provider.dispose!() } : {}),
     async generate(messages: ChatMessage[], opts?: GenerateOptions): Promise<GenerateResult> {
       const gen = trace.generation(role, { model: `${provider.id}:${opts?.model ?? provider.defaultModel}`, input: messages, metadata: { role, ...meta() } });
       try {

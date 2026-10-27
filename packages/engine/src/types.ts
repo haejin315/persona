@@ -111,6 +111,8 @@ export interface Turn {
     latencyMs?: number;
     /** Streamed replies: time to the first visible character (docs/11). */
     firstTokenMs?: number;
+    /** Streamed replies: the provider's start-up overlapped with the user's typing (docs/11). */
+    warm?: boolean;
     usage?: TokenUsage;
     filters?: string[];
     /**

@@ -114,6 +114,7 @@ async function main() {
     await streamReply(session.sendStream(line));
   }
   rl.close();
+  session.close();
   trace.update({ output: { turns: session.turns.length, memory: session.memory } });
   trace.end();
   await flushTracing();

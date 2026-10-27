@@ -7,6 +7,8 @@ export interface GenerateResult {
   latencyMs: number;
   /** Streaming only: time to the first text delta (what the user waits before anything appears). */
   firstTokenMs?: number;
+  /** Streaming only: the reply used a process started by `prewarm` (its start-up was not waited for). */
+  warm?: boolean;
 }
 
 export interface GenerateOptions {
@@ -33,4 +35,11 @@ export interface LLMProvider {
   readonly defaultModel: string;
   generate(messages: ChatMessage[], opts?: GenerateOptions): Promise<GenerateResult>;
   stream(messages: ChatMessage[], opts?: GenerateOptions): AsyncIterable<string>;
+  /**
+   * Optional: start paying a fixed per-call cost now (a CLI process, a connection) for the next
+   * `stream()` with the same static prompt, so it overlaps with the user's typing (docs/11).
+   */
+  prewarm?(messages: ChatMessage[], opts?: GenerateOptions): void;
+  /** Optional: drop anything `prewarm` started. */
+  dispose?(): void;
 }

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { ChatMessage } from "../types.js";
 import type { GenerateOptions, GenerateResult, LLMProvider } from "./types.js";
@@ -30,6 +30,62 @@ export class ClaudeCliProvider implements LLMProvider {
   }
   private bin: string;
   private thinking?: "off" | "adaptive";
+  /** A process started by `prewarm`, waiting for its prompt on stdin. */
+  private warm?: { child: ChildProcess; key: string; stderr: string; failed: boolean };
+
+  /**
+   * The eval and tracing wrappers are `Object.create(provider)` objects, so `this` in a method may
+   * be a wrapper while another wrapper calls `stream` on the instance itself. State lives on the
+   * instance that owns `bin`.
+   */
+  private self(): ClaudeCliProvider {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    let o: object = this;
+    while (!Object.prototype.hasOwnProperty.call(o, "bin")) o = Object.getPrototypeOf(o);
+    return o as ClaudeCliProvider;
+  }
+
+  /** What a warm process is good for: same model, same thinking setting, same static system prompt. */
+  private warmKey(model: string, system: string, thinking?: "off" | "adaptive"): string {
+    return `${model}\u0000${thinking ?? this.self().thinking ?? ""}\u0000${system}`;
+  }
+
+  /**
+   * Start the CLI for the next reply now (its ~3 s of start-up then overlaps with the user's typing).
+   * The prompt is sent later as a stream-json user message; the system prompt must already be known,
+   * so a warm process is reused only while the static prompt is unchanged (memory consolidation and
+   * a new world day change it, and those turns pay the cold start).
+   */
+  prewarm(messages: ChatMessage[], opts?: GenerateOptions): void {
+    const s = this.self();
+    const model = opts?.model ?? s.defaultModel;
+    const { system } = foldMessages(messages);
+    const key = s.warmKey(model, system, opts?.thinking);
+    if (s.warm && s.warm.key === key && !s.warm.failed && s.warm.child.exitCode === null) return;
+    s.dispose();
+    const child = spawn(s.bin, [...s.args(model, system, "stream-json"), "--input-format", "stream-json"], { env: s.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"] });
+    const warm = { child, key, stderr: "", failed: false };
+    child.stderr.setEncoding("utf8").on("data", (d) => (warm.stderr += d));
+    child.on("error", () => (warm.failed = true));
+    child.on("exit", () => (warm.failed = true));
+    // A waiting process must not keep the parent alive (an eval run ends when its work ends).
+    child.unref();
+    for (const st of [child.stdout, child.stderr, child.stdin]) sock(st).unref();
+    if (!s.exitHook) {
+      s.exitHook = () => s.dispose();
+      process.once("exit", s.exitHook);
+    }
+    s.warm = warm;
+  }
+  private exitHook?: () => void;
+
+  dispose(): void {
+    const s = this.self();
+    if (!s.warm) return;
+    const w = s.warm;
+    s.warm = undefined;
+    if (w.child.exitCode === null) w.child.kill();
+  }
 
   private args(model: string, system: string, format: "json" | "stream-json"): string[] {
     const args = ["-p", "--output-format", format, "--model", model, "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--exclude-dynamic-system-prompt-sections", "--no-session-persistence", "--max-turns", "1"];
@@ -84,21 +140,38 @@ export class ClaudeCliProvider implements LLMProvider {
    * that sends no partial messages the whole text is yielded once at the end.
    */
   async *stream(messages: ChatMessage[], opts?: GenerateOptions): AsyncIterable<string> {
-    const model = opts?.model ?? this.defaultModel;
+    const s = this.self();
+    const model = opts?.model ?? s.defaultModel;
     const { system, prompt } = foldMessages(messages);
     const t0 = Date.now();
-    const child = spawn(this.bin, this.args(model, system, "stream-json"), { env: this.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"], signal: opts?.signal });
+    let child: ChildProcess;
     let stderr = "";
-    child.stderr.setEncoding("utf8").on("data", (d) => (stderr += d));
+    let adopted = false;
+    const warm = s.warm;
+    if (warm && warm.key === s.warmKey(model, system, opts?.thinking) && !warm.failed && warm.child.exitCode === null) {
+      // Adopt the process started while the user was typing; it takes the prompt as a stream-json message.
+      s.warm = undefined;
+      adopted = true;
+      child = warm.child;
+      stderr = warm.stderr;
+      child.ref();
+      for (const st of [child.stdout, child.stderr, child.stdin]) sock(st).ref();
+      child.stderr!.on("data", (d) => (stderr += d));
+      if (opts?.signal) opts.signal.addEventListener("abort", () => child.kill(), { once: true });
+      child.stdin!.end(`${JSON.stringify({ type: "user", message: { role: "user", content: prompt } })}\n`, "utf8");
+    } else {
+      child = spawn(s.bin, s.args(model, system, "stream-json"), { env: s.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"], signal: opts?.signal });
+      child.stderr!.setEncoding("utf8").on("data", (d) => (stderr += d));
+      child.stdin!.end(prompt, "utf8");
+    }
     const exit = new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
       child.on("close", resolve);
     });
-    child.stdin.end(prompt, "utf8");
 
     const state = newStreamState();
     let firstTokenMs: number | undefined;
-    for await (const line of createInterface({ input: child.stdout })) {
+    for await (const line of createInterface({ input: child.stdout! })) {
       const delta = parseStreamLine(line, state);
       if (!delta) continue;
       if (firstTokenMs === undefined) firstTokenMs = Date.now() - t0;
@@ -112,9 +185,12 @@ export class ClaudeCliProvider implements LLMProvider {
       yield state.result.result;
     }
     const r = resultOf(state.result, model);
-    opts?.onDone?.({ model: r.model, usage: r.usage, latencyMs: Date.now() - t0, firstTokenMs });
+    opts?.onDone?.({ model: r.model, usage: r.usage, latencyMs: Date.now() - t0, firstTokenMs, warm: adopted });
   }
 }
+
+/** Child stdio pipes are sockets at runtime (ref/unref), typed as plain streams. */
+const sock = (st: unknown) => st as { ref(): void; unref(): void };
 
 export interface StreamState {
   /** content block index → type ("thinking" | "text" | ...). */

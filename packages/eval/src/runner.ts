@@ -174,6 +174,7 @@ export async function runConversation(
     (simUsage.model ? costOf(simUsage.model, simUsage).usd : 0) +
     (memoryUsage.model ? costOf(memoryUsage.model, memoryUsage).usd : 0);
 
+  session.close(); // drop the process kept warm for a next reply that is not coming
   const rec: ConversationRecord = {
     id,
     scenarioId: scenario.id,

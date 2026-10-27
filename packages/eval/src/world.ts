@@ -466,6 +466,7 @@ export async function runWorldConversation(
     log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${compacted ? `, ${compacted} folded into the summary` : ""}${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}${noTask ? " — WARNING: the scenario expected an errand here and none was extracted; the ledger will be empty" : ""}`);
   }
 
+  for (const sess of sessions.values()) sess.close(); // processes kept warm for replies that are not coming
   const rec: WorldRecord = {
     id,
     scenarioId: scenario.id,

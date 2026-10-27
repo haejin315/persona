@@ -220,6 +220,26 @@ describe("session", () => {
     expect(r.value.meta?.filters).toEqual(["repeated-opener"]);
   });
 
+  it("prewarms the provider after each reply with the static prompt, and close() disposes it", async () => {
+    const warmed: string[] = [];
+    let disposed = 0;
+    const p: LLMProvider = {
+      ...fake("답"),
+      prewarm(messages, opts) {
+        warmed.push(`${opts?.thinking ?? "-"}:${messages.filter((m) => m.role === "system").length}`);
+      },
+      dispose() {
+        disposed++;
+      },
+    };
+    const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: p, thinking: "off" });
+    s.open();
+    await s.send("hi");
+    expect(warmed).toEqual(["off:1"]);
+    s.close();
+    expect(disposed).toBe(1);
+  });
+
   it("continue adds a character turn without a user turn", async () => {
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake() });
     s.open();

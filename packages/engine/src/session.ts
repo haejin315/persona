@@ -189,7 +189,19 @@ export class ChatSession {
       ...(filtered.applied.length ? { filters: filtered.applied } : {}),
     });
     this.scheduleConsolidation();
+    this.prewarm();
     return turn;
+  }
+
+  /** Let the provider pay the next reply's fixed start-up cost while the user types (docs/11). */
+  private prewarm(): void {
+    if (this.pending) return; // the static prompt is about to change; prewarm after settle() instead
+    this.provider.prewarm?.(this.buildMessages(), { model: this.model, thinking: this.thinking });
+  }
+
+  /** Drop anything the provider keeps ready for this session. Call when the conversation ends. */
+  close(): void {
+    this.provider.dispose?.();
   }
 
   /**
@@ -210,7 +222,10 @@ export class ChatSession {
 
   /** Wait for any consolidation in flight; rethrows its error once. */
   async settle(): Promise<void> {
-    if (this.pending) await this.pending;
+    if (this.pending) {
+      await this.pending;
+      this.prewarm(); // the memory block changed; warm the next reply on the new prompt
+    }
     if (this.pendingError) {
       const e = this.pendingError;
       this.pendingError = undefined;
@@ -295,10 +310,12 @@ export class ChatSession {
       promptVersion: this.promptVersion.id,
       latencyMs: done?.latencyMs,
       ...(done?.firstTokenMs !== undefined ? { firstTokenMs: done.firstTokenMs } : {}),
+      ...(done?.warm ? { warm: true } : {}),
       usage: done?.usage,
       ...(applied.length ? { filters: applied } : {}),
     });
     this.scheduleConsolidation();
+    this.prewarm();
     return turn;
   }
 
