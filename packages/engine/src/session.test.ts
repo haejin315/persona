@@ -62,6 +62,21 @@ describe("prompt versions", () => {
     }
   });
 
+  it("v16 speaks of a folded [days a-b] paragraph only when there is one, and is v13 otherwise", () => {
+    const world = { day: 31, weekday: "Wednesday", slot: "morning", place: "카페 '모퉁이'", daysSinceUser: 30 } as const;
+    const build = (pv: string, summary: string) => {
+      const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: pv, persona });
+      s.memory = { ...emptyMemory(), summary };
+      s.world = world;
+      return s.buildMessages()[0]!.content;
+    };
+    const folded = "[days 2-23] day 2 (Tuesday) 오후 책다락에서 민수의 책 두 권을 받아 왔다.";
+    expect(build("v16-structured", folded)).toContain("have faded");
+    expect(build("v16-structured", "평범한 한 달이었다.")).not.toContain("have faded");
+    expect(build("v16-structured", "평범한 한 달이었다.")).toBe(build("v13-structured", "평범한 한 달이었다."));
+    expect(build("v13-structured", folded)).not.toContain("have faded");
+  });
+
   it("v2 carries memory facts into the prompt", () => {
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v2-structured" });
     s.memory = { ...emptyMemory(), facts: [{ text: "유저의 이름은 민수다", source: "user" }] };

@@ -49,6 +49,7 @@ seedMemory:
       notes: ["아침 단골, 몇 번 마주친 정도"]
 phases:
   - kind: chat
+    expectTask: true
     characterId: haru
     slot: morning
     userTurns: 5

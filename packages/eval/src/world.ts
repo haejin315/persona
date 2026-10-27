@@ -75,6 +75,9 @@ const ChatPhase = z.object({
   userTurns: z.number().int().min(1),
   beats: z.array(Beat).min(1),
   probes: z.array(WorldProbe).default([]),
+  /** The chat is meant to leave an errand behind: warn when nothing is extracted (one T3 regression
+   *  run passed on an empty ledger because the simulated user skipped a day inside the chat). */
+  expectTask: z.boolean().default(false),
 });
 const AdvancePhase = z.object({ kind: z.literal("advance"), days: z.number().int().min(1).default(1) });
 /** A scripted world event (T5): happens at the given slot of the current day, before the next advance. */
@@ -203,6 +206,8 @@ export type PhaseRecord =
       probes: WorldProbe[];
       /** Tasks extracted from this chat (source arm only). */
       tasks: string[];
+      /** The scenario expected an errand from this chat and none was extracted. */
+      noTask?: boolean;
     }
   | {
       index: number;
@@ -454,8 +459,9 @@ export async function runWorldConversation(
       const at = world.character(p.characterId).routine[world.slot] ?? world.whereIs(p.characterId) ?? world.state.places[0]!.id;
       world.recordChat(p.characterId, scenario.persona.name, at);
     }
-    phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, ...(compacted ? { compacted } : {}), turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks });
-    log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${compacted ? `, ${compacted} folded into the summary` : ""}${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}`);
+    const noTask = !source && p.expectTask && tasks.length === 0;
+    phases.push({ index: i, kind: "chat", characterId: p.characterId, day: world.day, worldBlock, injected, ...(compacted ? { compacted } : {}), turns: phaseTurns, memory: structuredClone(session.memory), probes: p.probes, tasks, ...(noTask ? { noTask: true } : {}) });
+    log(`  ${id}: phase ${i} chat day ${world.day}, ${p.userTurns} user turns, ${injected.length} fact(s) injected${compacted ? `, ${compacted} folded into the summary` : ""}${tasks.length ? `, tasks: ${tasks.join(" | ")}` : ""}${noTask ? " — WARNING: the scenario expected an errand here and none was extracted; the ledger will be empty" : ""}`);
   }
 
   const rec: WorldRecord = {
@@ -745,6 +751,7 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
     lines.push(`**${r.id}**`);
     for (const p of r.phases) {
       if (p.kind === "chat" && p.tasks.length) lines.push(`- tasks after phase ${p.index}: ${p.tasks.join(" | ")}`);
+      if (p.kind === "chat" && p.noTask) lines.push(`- **no task extracted after phase ${p.index}, though the scenario expected an errand: this run measured an empty ledger**`);
       if (p.kind === "event") lines.push(`- ${p.event.id} day ${p.event.day} ${p.event.slot} @${p.event.where} (scripted): ${p.event.result}${p.event.effects ? ` → ${JSON.stringify(p.event.effects)}` : ""}`);
       if (p.kind === "advance") {
         const scenes = p.events.filter((x) => x.origin === "scene" && x.details.length).length;

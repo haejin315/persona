@@ -193,7 +193,7 @@ function recentlySaid(recent: Turn[], name: string, replies = 3): string {
  * character off-screen is not here: it arrives as MEMORY facts with a `witnessed`/`told` source
  * (world/sync.ts), so the same rules that govern remembering govern it.
  */
-const NOW_BLOCK = (w: WorldBlock, user: string, aboutUser: boolean) => `# NOW
+const NOW_BLOCK = (w: WorldBlock, user: string, aboutUser: boolean, folded = false) => `# NOW
 Day ${w.day} (${w.weekday}), ${w.slot}. You are at ${w.place}.${w.placeCondition ? ` ${w.place} right now: ${w.placeCondition}.` : ""}
 The calendar and the state of places are this world's, not ${user}'s: if ${user} has the day of the week or a place wrong, say so once, plainly, and go on. What ${user} is doing, holding or feeling right now is still ${user}'s to say.
 ${
@@ -205,6 +205,11 @@ ${
   w.daysSinceUser === 0
     ? ""
     : `${w.daysSinceUser === 1 ? "A day has" : `${w.daysSinceUser} days have`} passed since you last spoke with ${user}. What you did and learned in between is in MEMORY, dated relative to today ("yesterday", "2 days ago"); it happened to you, so speak of it as your own experience when it comes up, and do not describe anything about those days that MEMORY does not hold. If MEMORY holds nothing for a stretch of those days, it was an ordinary stretch: say it was quiet; do not fill it with deliveries, customers or weather you do not remember.`
+}${
+  folded
+    ? `
+A paragraph in MEMORY that starts with [days a-b] is a condensed record of those days: what happened, who, which day. Say what it says, in your own words, and no more. The small details of those days (who opened a door, who else was around, how worn a corner was, what exactly was said) have faded; when ${user} asks for one that is not written there, say you do not remember that part rather than supply it.`
+    : ""
 }
 
 `;
@@ -215,6 +220,7 @@ function buildV2(
   variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
   splitContext = false,
+  foldAware = false,
 ): ChatMessage[] {
   {
     const st = card.style[lang]!;
@@ -273,7 +279,7 @@ ${REGISTER_BLOCK(name, lang)}
 ## Examples of how ${name} talks
 ${examples || "(none)"}
 
-${world ? NOW_BLOCK(world, persona.name, memory.facts.some((x) => x.about === "user")) : ""}${
+${world ? NOW_BLOCK(world, persona.name, memory.facts.some((x) => x.about === "user"), foldAware && memory.summary.includes("[days ")) : ""}${
   splitContext
     ? ""
     : `# MEMORY (what has happened so far - treat as true)
@@ -519,6 +525,19 @@ export const v15Structured: PromptVersion = {
   build: (ctx) => buildV2(ctx, "card", 13),
 };
 
+/**
+ * v16: v13 plus one paragraph that appears only when MEMORY holds a folded [days a-b] paragraph
+ * (long gaps, docs/10 T6). The fold keeps who/what/which day; when the character re-expands it in
+ * conversation it adds the small details the fold dropped ("I was the one who asked him to open
+ * the door", "it was just the two of us": T6 30-day, 4/20 replies). The paragraph says those details
+ * have faded and are to be said so, not supplied. Identical to v13 when nothing is folded.
+ */
+export const v16Structured: PromptVersion = {
+  id: "v16-structured",
+  description: "v13 + a folded [days a-b] paragraph is said as written and no more; details it dropped have faded and are not supplied.",
+  build: (ctx) => buildV2(ctx, "card", 11, false, false, true),
+};
+
 export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v1Flat.id]: v1Flat,
   [v2Structured.id]: v2Structured,
@@ -535,6 +554,7 @@ export const PROMPT_VERSIONS: Record<string, PromptVersion> = {
   [v13Structured.id]: v13Structured,
   [v14Structured.id]: v14Structured,
   [v15Structured.id]: v15Structured,
+  [v16Structured.id]: v16Structured,
   [v3Cached.id]: v3Cached,
   [v3Recent.id]: v3Recent,
   [v2NoBoundaries.id]: v2NoBoundaries,

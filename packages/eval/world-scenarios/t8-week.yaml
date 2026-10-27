@@ -60,6 +60,7 @@ seedMemory:
       notes: ["선영에게 들은 아침 단골"]
 phases:
   - kind: chat
+    expectTask: true
     characterId: haru
     slot: morning
     userTurns: 5

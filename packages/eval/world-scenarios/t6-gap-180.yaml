@@ -37,6 +37,7 @@ seedMemory:
       notes: ["책을 찾아 달라고 부탁한 손님"]
 phases:
   - kind: chat
+    expectTask: true
     characterId: haru
     slot: morning
     userTurns: 5

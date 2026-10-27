@@ -30,6 +30,7 @@ seedMemory:
     notes: ["서로 이름을 알고 가벼운 농담을 주고받는다"]
 phases:
   - kind: chat
+    expectTask: true
     characterId: haru
     userTurns: 6
     beats:
