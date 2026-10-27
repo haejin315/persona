@@ -37,7 +37,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import { BudgetTracker, trackedProvider } from "./budget.js";
 import { resolveProvider } from "./providers.js";
-import { recordFileName } from "./runner.js";
+import { drain, recordFileName } from "./runner.js";
 import { ScriptedUser, UserSimulator, type UserSource } from "./simulator.js";
 import type { Arm, Scenario, UsageTotals } from "./types.js";
 
@@ -393,6 +393,7 @@ export async function runWorldConversation(
         promptVersion: arm.promptVersion,
         model: chat.model,
         temperature: arm.temperature,
+        thinking: arm.thinking,
         persona: scenario.persona,
         memory: { model: mem.model, ...(arm.memory ?? {}) },
         filters: arm.filters,
@@ -432,9 +433,10 @@ export async function runWorldConversation(
     for (let ut = 1; ut <= p.userTurns; ut++) {
       const msg = await user.next(ut, session.turns, name);
       addUsage(usage.simulator, msg.usage, msg.model);
-      const reply = await session.send(msg.text);
+      const reply = await drain(session.sendStream(msg.text));
       if (reply.meta?.usage) addUsage(usage.character, reply.meta.usage, reply.meta.model);
     }
+    await session.settle(); // consolidation started by the last reply, before the memory is snapshotted
     if (session.memoryUsage.calls > consolidationsBefore) {
       const u = session.memoryUsage;
       usage.memory.promptTokens = u.promptTokens;
@@ -726,9 +728,11 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
   const lines: string[] = [
     `## ${title}`,
     "",
-    `| arm | n | recall probes | negative probes |${anyAgree ? " agree |" : ""} fabricated / replies | unaware | grounded | world calls · tokens / run | char prompt tokens / reply |`,
-    `|---|---:|---:|---:|${anyAgree ? "---:|" : ""}---:|---:|---:|---|---:|`,
+    `| arm | n | recall probes | negative probes |${anyAgree ? " agree |" : ""} fabricated / replies | unaware | grounded | world calls · tokens / run | char prompt tokens / reply | reply s (median · p90) | first text s |`,
+    `|---|---:|---:|---:|${anyAgree ? "---:|" : ""}---:|---:|---:|---|---:|---:|---:|`,
   ];
+  const q = (xs: number[], p: number) => (xs.length ? xs.slice().sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))]! : NaN);
+  const sec = (ms: number) => (Number.isNaN(ms) ? "–" : (ms / 1000).toFixed(1));
   for (const [armId, { recs, scores: sc }] of byArm) {
     const t = sc.reduce(
       (acc, s) => {
@@ -741,8 +745,18 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
     const wtok = recs.reduce((n, r) => n + r.usage.world.promptTokens + r.usage.world.completionTokens, 0) / recs.length;
     const creplies = recs.reduce((n, r) => n + r.usage.character.calls, 0);
     const cprompt = recs.reduce((n, r) => n + r.usage.character.promptTokens, 0);
+    const lat: number[] = [];
+    const first: number[] = [];
+    for (const r of recs)
+      for (const p of r.phases)
+        if (p.kind === "chat")
+          for (const tn of p.turns) {
+            if (tn.role !== "character" || !tn.meta) continue;
+            if (tn.meta.latencyMs) lat.push(tn.meta.latencyMs);
+            if (tn.meta.firstTokenMs) first.push(tn.meta.firstTokenMs);
+          }
     lines.push(
-      `| ${armId} | ${recs.length} | ${pct(t.recallOk, t.recallTotal)} | ${pct(t.negativeOk, t.negativeTotal)} |${anyAgree ? ` ${pct(t.agreeOk, t.agreeTotal)} |` : ""} ${pct(t.fabricated, t.replies)} | ${t.unaware} | ${t.grounded} | ${wcalls.toFixed(1)} · ${Math.round(wtok)} | ${creplies ? Math.round(cprompt / creplies) : "–"} |`,
+      `| ${armId} | ${recs.length} | ${pct(t.recallOk, t.recallTotal)} | ${pct(t.negativeOk, t.negativeTotal)} |${anyAgree ? ` ${pct(t.agreeOk, t.agreeTotal)} |` : ""} ${pct(t.fabricated, t.replies)} | ${t.unaware} | ${t.grounded} | ${wcalls.toFixed(1)} · ${Math.round(wtok)} | ${creplies ? Math.round(cprompt / creplies) : "–"} | ${sec(q(lat, 0.5))} · ${sec(q(lat, 0.9))} | ${sec(q(first, 0.5))} |`,
     );
   }
   lines.push("", "### Ledger per run", "");

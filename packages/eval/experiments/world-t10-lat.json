@@ -1,0 +1,18 @@
+{
+  "scenarioId": "t10-attention",
+  "arms": [
+    { "id": "sonnet55/think", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "attention": "llm" },
+    { "id": "sonnet46/nothink", "promptVersion": "v13-structured", "model": "claude-cli:claude-sonnet-4-6", "thinking": "off", "worldSync": true, "attention": "llm" },
+    { "id": "haiku45/nothink", "promptVersion": "v13-structured", "model": "claude-cli:claude-haiku-4-5", "thinking": "off", "worldSync": true, "attention": "llm" }
+  ],
+  "repeats": 2,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "verifierModel": "claude-cli:haiku",
+  "judgeModel": "claude-cli:opus",
+  "eventsPerDay": 1,
+  "attentionCap": 3,
+  "replayArmId": "sonnet55/think",
+  "outDir": "eval-results/world-t10-lat"
+}

@@ -1,4 +1,4 @@
-import { firstSpeechComplete, stripRepeatedOpener } from "./filters.js";
+import { firstSpeechComplete, firstSpeechLine, stripRepeatedOpener } from "./filters.js";
 import { DEFAULT_MEMORY_CONFIG, MemoryManager, type MemoryConfig } from "./memory/manager.js";
 import { getPromptVersion, type PromptVersion } from "./prompt/builder.js";
 import type { GenerateOptions, LLMProvider } from "./providers/types.js";
@@ -27,6 +27,8 @@ export interface SessionOptions {
   memory?: Partial<MemoryConfig>;
   model?: string;
   temperature?: number;
+  /** Passed to the provider on every reply; "off" answers without extended thinking where the model allows (docs/11). */
+  thinking?: "off" | "adaptive";
   persona?: UserPersona;
   /**
    * Engine-side reply filters (filters.ts). The repeated-opener filter is on by default since
@@ -70,6 +72,10 @@ export class ChatSession {
   private memoryManager: MemoryManager;
   private model?: string;
   private temperature?: number;
+  private thinking?: "off" | "adaptive";
+  /** Memory consolidation in flight (started after a reply, awaited before the next one). */
+  private pending?: Promise<void>;
+  private pendingError?: unknown;
   private filters: { repeatedOpener?: boolean };
   private pendingBoundary?: string;
 
@@ -80,6 +86,7 @@ export class ChatSession {
     this.promptVersion = getPromptVersion(opts.promptVersion);
     this.model = opts.model;
     this.temperature = opts.temperature;
+    this.thinking = opts.thinking;
     this.persona = opts.persona ?? DEFAULT_PERSONA;
     this.filters = { repeatedOpener: true, ...(opts.filters ?? {}) };
     this.memoryManager = new MemoryManager(opts.memoryProvider ?? opts.provider, {
@@ -166,20 +173,49 @@ export class ChatSession {
   }
 
   private async generate(opts: GenerateOptions): Promise<Turn> {
-    await this.maybeConsolidate();
+    await this.settle();
     const res = await this.provider.generate(this.buildMessages(), {
       model: this.model,
       temperature: this.temperature,
+      thinking: this.thinking,
       ...opts,
     });
     const filtered = this.applyFilters(res.text.trim());
-    return this.push("character", filtered.text, {
+    const turn = this.push("character", filtered.text, {
       model: res.model,
       promptVersion: this.promptVersion.id,
       latencyMs: res.latencyMs,
       usage: res.usage,
       ...(filtered.applied.length ? { filters: filtered.applied } : {}),
     });
+    this.scheduleConsolidation();
+    return turn;
+  }
+
+  /**
+   * Memory consolidation runs after a reply, off the user's path, and is awaited before the next
+   * reply (docs/11: it used to run before the reply and cost a whole extra call on those turns).
+   * The next reply sees the same memory either way; only the waiting moved.
+   */
+  private scheduleConsolidation(): void {
+    if (this.pending || !this.memoryManager.needsConsolidation(this.turns, this.memory)) return;
+    this.pending = this.maybeConsolidate()
+      .catch((e) => {
+        this.pendingError = e;
+      })
+      .finally(() => {
+        this.pending = undefined;
+      });
+  }
+
+  /** Wait for any consolidation in flight; rethrows its error once. */
+  async settle(): Promise<void> {
+    if (this.pending) await this.pending;
+    if (this.pendingError) {
+      const e = this.pendingError;
+      this.pendingError = undefined;
+      throw e;
+    }
   }
 
   /** Card openers for the session language (used by the repeated-opener filter). */
@@ -201,7 +237,7 @@ export class ChatSession {
   }
 
   private async *generateStream(opts: GenerateOptions): AsyncGenerator<string, Turn> {
-    await this.maybeConsolidate();
+    await this.settle();
     let done: Parameters<NonNullable<GenerateOptions["onDone"]>>[0] | undefined;
     // With a filter on, the prefix up to the end of the first spoken line is held back so the
     // filter can edit it before the user sees it; the rest streams through untouched.
@@ -216,6 +252,7 @@ export class ChatSession {
     for await (const delta of this.provider.stream(this.buildMessages(), {
       model: this.model,
       temperature: this.temperature,
+      thinking: this.thinking,
       ...opts,
       onDone: (r) => {
         done = r;
@@ -233,6 +270,19 @@ export class ChatSession {
         held = undefined;
         out += prefix;
         yield prefix;
+        continue;
+      }
+      // The filter only ever edits the first spoken line; complete lines ahead of it (the opening
+      // *action*) go through at once instead of waiting for the speech to finish (docs/11: that
+      // wait was ~2.5 s of the time to the first visible character).
+      const lines = held.split("\n");
+      const first = firstSpeechLine(held);
+      const ahead = first ? first.index : lines.length - 1;
+      if (ahead > 0) {
+        const prefix = `${lines.slice(0, ahead).join("\n")}\n`;
+        held = lines.slice(ahead).join("\n");
+        out += prefix;
+        yield prefix;
       }
     }
     if (held !== undefined) {
@@ -240,13 +290,16 @@ export class ChatSession {
       out += prefix;
       yield prefix;
     }
-    return this.push("character", out.trim(), {
+    const turn = this.push("character", out.trim(), {
       model: done?.model ?? this.model ?? this.provider.defaultModel,
       promptVersion: this.promptVersion.id,
       latencyMs: done?.latencyMs,
+      ...(done?.firstTokenMs !== undefined ? { firstTokenMs: done.firstTokenMs } : {}),
       usage: done?.usage,
       ...(applied.length ? { filters: applied } : {}),
     });
+    this.scheduleConsolidation();
+    return turn;
   }
 
   private async maybeConsolidate(): Promise<void> {

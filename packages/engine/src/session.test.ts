@@ -138,6 +138,88 @@ describe("session", () => {
     expect(r.value.meta?.usage?.completionTokens).toBe(2);
   });
 
+  it("consolidates memory after the reply, not before it, and settle() waits for it", async () => {
+    const reply = JSON.stringify({ summary: "둘은 이름을 나눴다.", facts: ["유저 이름: 민수"], relationship: { stage: "acquaintance", notes: [] } });
+    let memoryCalls = 0;
+    const slowMemory: LLMProvider = {
+      ...fake(reply),
+      async generate() {
+        memoryCalls++;
+        await new Promise((r) => setTimeout(r, 30));
+        return { text: reply, model: "fake-1", latencyMs: 30, usage: { promptTokens: 10, completionTokens: 2 } };
+      },
+    };
+    const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake("답"), memoryProvider: slowMemory, memory: { windowTurns: 4, consolidateEvery: 2 } });
+    s.open();
+    await s.send("하나");
+    await s.send("둘");
+    expect(memoryCalls).toBe(0); // 5 turns, 1 outside the window: not yet
+    await s.send("셋"); // 7 turns, 3 outside: consolidation starts after this reply
+    expect(memoryCalls).toBe(1);
+    expect(s.memory.summary).toBe(""); // still running: the reply did not wait for it
+    await s.settle();
+    expect(s.memory.summary).toBe("둘은 이름을 나눴다.");
+    expect(s.memoryUsage.calls).toBe(1);
+  });
+
+  it("passes the session's thinking setting to the provider and records first-token time from streaming", async () => {
+    const seen: unknown[] = [];
+    const p: LLMProvider = {
+      id: "fake",
+      defaultModel: "fake-1",
+      async generate(_m, opts) {
+        seen.push(opts?.thinking);
+        return { text: "ok", model: "fake-1", latencyMs: 1, usage: { promptTokens: 1, completionTokens: 1 } };
+      },
+      async *stream(_m, opts) {
+        seen.push(opts?.thinking);
+        yield "스트";
+        yield "림";
+        opts?.onDone?.({ model: "fake-1", latencyMs: 900, firstTokenMs: 250, usage: { promptTokens: 1, completionTokens: 1 } });
+      },
+    };
+    const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: p, thinking: "off" });
+    s.open();
+    await s.send("hi");
+    const gen = s.sendStream("hi again");
+    let r = await gen.next();
+    while (!r.done) r = await gen.next();
+    expect(seen).toEqual(["off", "off"]);
+    expect(r.value.meta?.firstTokenMs).toBe(250);
+    expect(r.value.meta?.latencyMs).toBe(900);
+  });
+
+  it("streams the opening action line before the first spoken line is complete, and still strips a repeated opener", async () => {
+    const chunks = ["*행주를 접는다.*\n", "\"...아, ", "오셨네요.\"\n", "*컵을 집는다.*"];
+    const p: LLMProvider = {
+      id: "fake",
+      defaultModel: "fake-1",
+      async generate() {
+        return { text: '"...아, 안녕하세요."', model: "fake-1", latencyMs: 1 };
+      },
+      async *stream(_m, opts) {
+        for (const c of chunks) yield c;
+        opts?.onDone?.({ model: "fake-1", latencyMs: 5 });
+      },
+    };
+    const haru = cards.find((c) => c.id === "haru")!; // has openers ["...아,", ...], so the filter is on
+    const s = new ChatSession({ card: haru, lang: "ko", provider: p });
+    s.open();
+    // The previous reply begins with an opener (pushed directly: a reply made through send() would
+    // itself have been filtered against the card's first message).
+    s.turns.push({ role: "user", content: "hi", index: 1, ts: 0 }, { role: "character", content: '"...아, 안녕하세요."', index: 2, ts: 0 });
+    const seen: string[] = [];
+    const gen = s.sendStream("again");
+    let r = await gen.next();
+    while (!r.done) {
+      seen.push(r.value);
+      r = await gen.next();
+    }
+    expect(seen[0]).toBe("*행주를 접는다.*\n"); // released before the speech line was complete
+    expect(r.value.content).toBe('*행주를 접는다.*\n"오셨네요."\n*컵을 집는다.*');
+    expect(r.value.meta?.filters).toEqual(["repeated-opener"]);
+  });
+
   it("continue adds a character turn without a user turn", async () => {
     const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake() });
     s.open();

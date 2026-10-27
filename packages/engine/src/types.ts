@@ -109,6 +109,8 @@ export interface Turn {
     model?: string;
     promptVersion?: string;
     latencyMs?: number;
+    /** Streamed replies: time to the first visible character (docs/11). */
+    firstTokenMs?: number;
     usage?: TokenUsage;
     filters?: string[];
     /**

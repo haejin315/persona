@@ -69,6 +69,13 @@ function addUsage(t: UsageTotals, u?: TokenUsage, model?: string) {
 }
 
 /** Generate one simulated conversation for a (scenario, arm) pair. */
+/** Run a streaming reply to completion and return the recorded turn. */
+export async function drain<T>(gen: AsyncGenerator<string, T>): Promise<T> {
+  let r = await gen.next();
+  while (!r.done) r = await gen.next();
+  return r.value;
+}
+
 export async function runConversation(
   scenario: Scenario,
   arm: Arm,
@@ -106,6 +113,7 @@ export async function runConversation(
     promptVersion: arm.promptVersion,
     model: chat.model,
     temperature: arm.temperature,
+    thinking: arm.thinking,
     persona: scenario.persona,
     memory: { model: mem.model, ...(arm.memory ?? {}) },
     filters: arm.filters,
@@ -140,7 +148,8 @@ export async function runConversation(
     try {
       const msg = await user.next(userTurn, session.turns, name);
       addUsage(simUsage, msg.usage, msg.model);
-      const reply = await session.send(msg.text);
+      const reply = await drain(session.sendStream(msg.text)); // streamed, as the chat CLI serves it: first-token time is recorded
+      await session.settle(); // consolidation runs after the reply; the snapshot below wants it finished
       if (reply.meta?.usage) {
         addUsage(usage as UsageTotals, reply.meta.usage);
         charModel = reply.meta.model ?? charModel;

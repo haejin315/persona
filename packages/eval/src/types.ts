@@ -61,6 +61,8 @@ export interface Arm {
   /** "openai:gpt-5-mini" etc. "fake" runs offline for tests. */
   model: string;
   temperature?: number;
+  /** "off" = reply without extended thinking where the model allows it (docs/11). */
+  thinking?: "off" | "adaptive";
   /**
    * Memory settings for this arm (merged over the engine defaults). `{ enabled: false }` gives a
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in

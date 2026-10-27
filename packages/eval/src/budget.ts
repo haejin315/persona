@@ -51,8 +51,17 @@ export function trackedProvider<P extends { generate: Function; stream: Function
     tracker.add(res.model ?? opts?.model ?? provider.defaultModel, res.usage);
     return res;
   }) as P["generate"];
-  wrapped.stream = (function* () {
-    throw new Error("streaming is not budget-tracked; use generate()");
+  // Streaming is priced from the provider's onDone (usage arrives with the last delta).
+  wrapped.stream = (async function* (messages: unknown, opts?: { model?: string; onDone?: (r: { model?: string; usage?: TokenUsage }) => void }) {
+    tracker.check();
+    const it = (provider.stream as (m: unknown, o?: unknown) => AsyncIterable<string>)(messages, {
+      ...(opts ?? {}),
+      onDone: (r: { model?: string; usage?: TokenUsage }) => {
+        tracker.add(r.model ?? opts?.model ?? provider.defaultModel, r.usage);
+        opts?.onDone?.(r);
+      },
+    });
+    for await (const delta of it) yield delta;
   }) as unknown as P["stream"];
   return wrapped;
 }
