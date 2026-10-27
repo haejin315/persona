@@ -6,7 +6,8 @@
 # what happened around), the foreman (the plan, what he knows of the week), and the bookshop owner
 # (did he hand the books to Haru himself?). Arms: one attention call with a cap of 3, the 7-day
 # rule, and everyone main. The rule drops Yoon (never spoken to, no errand of his own), so Haru's
-# errand is resolved without him and he never knows he handed the books over.
+# errand is resolved without him and he never knows he handed the books over. The agreement check
+# reads Haru's and Yoon's day-8 conversations side by side: the probes alone pass both of them.
 id: t10-attention
 world: haru-town-5
 lang: ko
@@ -145,3 +146,6 @@ phases:
         kind: negative
         ask: 세부를 묻는다
         expected: "@ledger (no invented visit, day or detail beyond what Yoon witnessed or was told)"
+agreements:
+  - about: 민수가 부탁한 『달빛 고양이』 두 권이 지금 어디에 있고, 하루가 책다락에서 받아 갔는지, 받아 갔다면 언제인지
+    characters: [haru, yoon]

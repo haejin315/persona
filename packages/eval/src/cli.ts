@@ -329,8 +329,9 @@ async function cmdWorldJudge(outDir: string, spec: string) {
     scoreTrace(rec.traceId, "world_fabricated", t.replies ? t.fabricated / t.replies : 0);
     scoreTrace(rec.traceId, "world_recall", t.recallTotal ? t.recallOk / t.recallTotal : 0);
     scoreTrace(rec.traceId, "world_negative_ok", t.negativeTotal ? t.negativeOk / t.negativeTotal : 0);
+    if (t.agreeTotal) scoreTrace(rec.traceId, "world_agree", t.agreeOk / t.agreeTotal);
     writeFileSync(join(dir, recordFileName(rec.id)), JSON.stringify(score, null, 2));
-    console.log(`✓ ${rec.id}  recall ${t.recallOk}/${t.recallTotal}  negative ${t.negativeOk}/${t.negativeTotal}  fabricated ${t.fabricated}/${t.replies}  unaware ${t.unaware}`);
+    console.log(`✓ ${rec.id}  recall ${t.recallOk}/${t.recallTotal}  negative ${t.negativeOk}/${t.negativeTotal}${t.agreeTotal ? `  agree ${t.agreeOk}/${t.agreeTotal}` : ""}  fabricated ${t.fabricated}/${t.replies}  unaware ${t.unaware}`);
   }
   printBudget("world-judge cost", budget);
 }

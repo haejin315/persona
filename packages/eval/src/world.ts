@@ -93,6 +93,17 @@ const EventPhase = z.object({
   userEffects: z.record(z.string(), z.string().nullable()).default({}),
 });
 
+/** Two or more characters, each talked to after the last advance, must agree about one matter (T10): the
+ *  judge reads their conversations side by side. The probes see one character at a time and cannot see
+ *  that the barista says "picked up on Wednesday" while the bookshop owner says "still here". */
+const Agreement = z.object({
+  /** What the accounts must agree about, in the scenario's language. */
+  about: z.string(),
+  /** Character ids; the latest chat phase of each after the last advance is compared. */
+  characters: z.array(z.string()).min(2),
+});
+export type Agreement = z.infer<typeof Agreement>;
+
 export const WorldScenario = z.object({
   id: z.string(),
   world: z.string(),
@@ -111,6 +122,7 @@ export const WorldScenario = z.object({
     )
     .default({}),
   phases: z.array(z.discriminatedUnion("kind", [ChatPhase, AdvancePhase, EventPhase])).min(1),
+  agreements: z.array(Agreement).default([]),
 });
 export type WorldScenario = z.infer<typeof WorldScenario>;
 export type ChatPhaseDef = z.infer<typeof ChatPhase>;
@@ -517,7 +529,9 @@ export interface WorldScoreRecord {
   armId: string;
   judgeModel: string;
   phases: WorldPhaseScore[];
-  totals: { replies: number; grounded: number; fabricated: number; unaware: number; recallOk: number; recallTotal: number; negativeOk: number; negativeTotal: number };
+  /** One entry per scenario agreement: do the characters' accounts of `about` agree with each other? */
+  agreements: { about: string; characters: string[]; ok: boolean; note?: string }[];
+  totals: { replies: number; grounded: number; fabricated: number; unaware: number; recallOk: number; recallTotal: number; negativeOk: number; negativeTotal: number; agreeOk: number; agreeTotal: number };
 }
 
 /** What the character knows from the ledger before a chat phase on `day`, as text for the judge. */
@@ -550,9 +564,9 @@ async function askJson(provider: LLMProvider, model: string | undefined, system:
   }
 }
 
-export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider; model?: string }): Promise<WorldScoreRecord> {
+export async function judgeWorld(rec: WorldRecord, opts: { provider: LLMProvider; model?: string; agreements?: Agreement[] }): Promise<WorldScoreRecord> {
   const phases: WorldPhaseScore[] = [];
-  const totals: WorldScoreRecord["totals"] = { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0 };
+  const totals: WorldScoreRecord["totals"] = { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0, agreeOk: 0, agreeTotal: 0 };
   let advanced = false;
   for (const p of rec.phases) {
     if (p.kind !== "chat") {
@@ -635,7 +649,60 @@ Respond with JSON only: {"replies": [{"userTurn": n, "label": "grounded|fabricat
     });
     phases.push({ index: p.index, characterId: p.characterId, replies, probes: probeScores });
   }
-  return { conversationId: rec.id, armId: rec.arm.id, judgeModel: `${opts.provider.id}:${opts.model ?? opts.provider.defaultModel}`, phases, totals };
+
+  // Agreements: the same day's conversations with two or more characters, side by side. Each probe
+  // above judges one character against the ledger; this judges the characters against each other.
+  let defs = opts.agreements;
+  if (!defs) {
+    try {
+      defs = findWorldScenario(rec.scenarioId).agreements;
+    } catch {
+      defs = [];
+    }
+  }
+  const agreements: WorldScoreRecord["agreements"] = [];
+  for (const a of defs) {
+    totals.agreeTotal++;
+    const sections: string[] = [];
+    const missing: string[] = [];
+    for (const cid of a.characters) {
+      let last: Extract<PhaseRecord, { kind: "chat" }> | undefined;
+      let seen = false;
+      for (const q of rec.phases) {
+        if (q.kind === "advance") seen = true;
+        else if (q.kind === "chat" && seen && q.characterId === cid) last = q;
+      }
+      if (!last) {
+        missing.push(cid);
+        continue;
+      }
+      const card = findCharacter(cid);
+      const name = card.name[rec.lang] ?? cid;
+      sections.push(`## ${name} [${cid}], day ${last.day}\n${last.turns.map((t) => `${t.role === "user" ? rec.persona.name : name}: ${t.content}`).join("\n")}`);
+    }
+    if (missing.length) {
+      agreements.push({ about: a.about, characters: a.characters, ok: false, note: `no conversation after the advance with: ${missing.join(", ")}` });
+      continue;
+    }
+    const roster = Object.values(rec.world.characters)
+      .map((c) => `- ${c.name}${c.aka?.length ? ` (also called ${c.aka.join(", ")})` : ""}`)
+      .join("\n");
+    const system = `You compare what several roleplay characters, each in a separate conversation with ${rec.persona.name}, said about the same matter. Decide whether their accounts AGREE with each other. You are not checking who is right: only whether what they state can all be true at once.
+- They agree when nothing one of them states contradicts what another states. Leaving things out, not knowing, hedged guesses and different wording are fine. One knowing more than the other is fine.
+- They disagree when they state incompatible facts: one says a thing happened and another says it did not or that it is still to happen; different days, places, people or outcomes for the same thing; one holds an object the other says is elsewhere.
+
+People in this world (each line is one person, whichever name is used):
+${roster}
+
+The matter: ${a.about}
+
+Respond with JSON only: {"agree": true|false, "note": "one sentence: what each states about the matter, and the contradiction if there is one"}`;
+    const out = await askJson(opts.provider, opts.model, system, sections.join("\n\n"));
+    const ok = out.agree === true;
+    if (ok) totals.agreeOk++;
+    agreements.push({ about: a.about, characters: a.characters, ok, note: typeof out.note === "string" ? out.note : undefined });
+  }
+  return { conversationId: rec.id, armId: rec.arm.id, judgeModel: `${opts.provider.id}:${opts.model ?? opts.provider.defaultModel}`, phases, agreements, totals };
 }
 
 // ---------- report ----------
@@ -649,21 +716,27 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
   }
   for (const s of scores) byArm.get(s.armId)?.scores.push(s);
   const pct = (a: number, b: number) => (b ? `${a}/${b}` : "–");
-  const lines: string[] = [`## ${title}`, "", "| arm | n | recall probes | negative probes | fabricated / replies | unaware | grounded | world calls · tokens / run | char prompt tokens / reply |", "|---|---:|---:|---:|---:|---:|---:|---|---:|"];
+  const anyAgree = scores.some((s) => (s.totals.agreeTotal ?? 0) > 0);
+  const lines: string[] = [
+    `## ${title}`,
+    "",
+    `| arm | n | recall probes | negative probes |${anyAgree ? " agree |" : ""} fabricated / replies | unaware | grounded | world calls · tokens / run | char prompt tokens / reply |`,
+    `|---|---:|---:|---:|${anyAgree ? "---:|" : ""}---:|---:|---:|---|---:|`,
+  ];
   for (const [armId, { recs, scores: sc }] of byArm) {
     const t = sc.reduce(
       (acc, s) => {
-        for (const k of Object.keys(acc) as (keyof typeof acc)[]) acc[k] += s.totals[k];
+        for (const k of Object.keys(acc) as (keyof typeof acc)[]) acc[k] += s.totals[k] ?? 0; // scores written before a column existed
         return acc;
       },
-      { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0 },
+      { replies: 0, grounded: 0, fabricated: 0, unaware: 0, recallOk: 0, recallTotal: 0, negativeOk: 0, negativeTotal: 0, agreeOk: 0, agreeTotal: 0 },
     );
     const wcalls = recs.reduce((n, r) => n + r.usage.world.calls, 0) / recs.length;
     const wtok = recs.reduce((n, r) => n + r.usage.world.promptTokens + r.usage.world.completionTokens, 0) / recs.length;
     const creplies = recs.reduce((n, r) => n + r.usage.character.calls, 0);
     const cprompt = recs.reduce((n, r) => n + r.usage.character.promptTokens, 0);
     lines.push(
-      `| ${armId} | ${recs.length} | ${pct(t.recallOk, t.recallTotal)} | ${pct(t.negativeOk, t.negativeTotal)} | ${pct(t.fabricated, t.replies)} | ${t.unaware} | ${t.grounded} | ${wcalls.toFixed(1)} · ${Math.round(wtok)} | ${creplies ? Math.round(cprompt / creplies) : "–"} |`,
+      `| ${armId} | ${recs.length} | ${pct(t.recallOk, t.recallTotal)} | ${pct(t.negativeOk, t.negativeTotal)} |${anyAgree ? ` ${pct(t.agreeOk, t.agreeTotal)} |` : ""} ${pct(t.fabricated, t.replies)} | ${t.unaware} | ${t.grounded} | ${wcalls.toFixed(1)} · ${Math.round(wtok)} | ${creplies ? Math.round(cprompt / creplies) : "–"} |`,
     );
   }
   lines.push("", "### Ledger per run", "");
@@ -697,6 +770,7 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
       for (const pr of p.probes) lines.push(`- probe @${pr.atUserTurn} ${pr.kind}: ${pr.ok ? "O" : "X"} ${pr.note ?? ""} ← ${pr.answer}`);
       for (const r of p.replies) if (r.label === "fabricated" || r.label === "unaware") lines.push(`- reply ${r.userTurn} \`${r.label}\`: ${r.note ?? ""} ← ${r.snippet}`);
     }
+    for (const a of s.agreements ?? []) lines.push(`- agree [${a.characters.join(", ")}] about ${a.about}: ${a.ok ? "O" : "X"} ${a.note ?? ""}`);
     lines.push("");
   }
   return lines.join("\n");

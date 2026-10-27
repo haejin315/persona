@@ -5,6 +5,7 @@ import { FakeProvider } from "./providers.js";
 import { summarise, toMarkdown } from "./report.js";
 import { runConversation } from "./runner.js";
 import { findScenario, loadScenarios } from "./scenarios.js";
+import { judgeWorld, worldReport, type WorldRecord } from "./world.js";
 
 const persona = { name: "민수" };
 
@@ -253,5 +254,53 @@ describe("user simulator prompt", () => {
     await sim.next(1, [], "하루");
     expect(seen[0]).toContain("ONE continuous meeting");
     expect(seen[0]).toContain("Never jump to a later time or another day");
+  });
+});
+
+describe("world agreements (docs/10 T10)", () => {
+  const chat = (index: number, characterId: string, line: string) =>
+    ({ index, kind: "chat", characterId, day: 8, slot: "morning", turns: [{ role: "user", content: "책은요?" }, { role: "assistant", content: line }], probes: [], memory: { facts: [] }, tasks: [] }) as unknown as WorldRecord["phases"][number];
+  const rec = {
+    id: "t#0",
+    scenarioId: "no-such-scenario",
+    arm: { id: "a", promptVersion: "v13-structured", model: "fake" },
+    lang: "ko",
+    persona: { name: "민수" },
+    phases: [chat(0, "haru", "내일 갈게요"), { index: 1, kind: "advance", fromDay: 1, toDay: 8, events: [], usage: { calls: 0 }, worldAfter: { ledger: [] } }, chat(2, "haru", "수요일에 받아 왔어요"), chat(3, "yoon", "아직 여기 있어요")],
+    world: { characters: { haru: { id: "haru", name: "하루" }, yoon: { id: "yoon", name: "윤" } }, ledger: [], places: [] },
+    usage: { character: { calls: 0 }, simulator: {}, memory: {}, world: { calls: 0, promptTokens: 0, completionTokens: 0 } },
+  } as unknown as WorldRecord;
+
+  it("judges the characters against each other, not against the ledger, and reports the column", async () => {
+    const seen: string[] = [];
+    const provider = new FakeProvider((messages) => {
+      const sys = messages[0].content;
+      if (sys.includes("AGREE with each other")) {
+        seen.push(messages[1].content);
+        return JSON.stringify({ agree: false, note: "Haru says picked up on Wednesday; Yoon says still here" });
+      }
+      return JSON.stringify({ replies: [], probes: [] });
+    });
+    const agreements = [{ about: "책이 어디 있는지", characters: ["haru", "yoon"] }];
+    const score = await judgeWorld(rec, { provider, agreements });
+    expect(score.totals.agreeTotal).toBe(1);
+    expect(score.totals.agreeOk).toBe(0);
+    expect(seen).toHaveLength(1);
+    // the latest conversation of each after the advance, not the day-1 one
+    expect(seen[0]).toContain("수요일에 받아 왔어요");
+    expect(seen[0]).toContain("아직 여기 있어요");
+    expect(seen[0]).not.toContain("내일 갈게요");
+    const md = worldReport([rec], [score], "t");
+    expect(md).toContain("| agree |");
+    expect(md).toContain("| 0/1 |");
+    expect(md).toContain("- agree [haru, yoon] about 책이 어디 있는지: X");
+  });
+
+  it("fails an agreement when a character was not talked to after the advance, and asks nobody", async () => {
+    const provider = new FakeProvider(() => JSON.stringify({ replies: [], probes: [] }));
+    const score = await judgeWorld(rec, { provider, agreements: [{ about: "x", characters: ["haru", "cho"] }] });
+    expect(score.agreements[0].ok).toBe(false);
+    expect(score.agreements[0].note).toContain("cho");
+    expect(provider.calls).toBe(2); // the two chat phases after the advance, no agreement call
   });
 });
