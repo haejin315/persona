@@ -3,7 +3,7 @@ import { findCharacter } from "../characters.js";
 import type { LLMProvider } from "../providers/types.js";
 import { ChatSession } from "../session.js";
 import { advanceDay, applyAttention, catchUp, decideAttention, extractTasks, newsFor } from "./llm.js";
-import { syncCharacter } from "./sync.js";
+import { compactWorldFacts, syncCharacter } from "./sync.js";
 import { World, type WorldFile } from "./world.js";
 
 const def: WorldFile = {
@@ -46,6 +46,8 @@ const fakeWorldLLM = (opts: { errand?: "done" | "failed" } = {}): LLMProvider & 
       } else if (sys.includes("pass with nobody watching")) {
         const m = sys.match(/Days (\d+) to (\d+)/)!;
         text = JSON.stringify({ events: [{ day: Number(m[1]) + 1, slot: "afternoon", where: "bookshop", who: ["yoon"], scope: "regional", result: `days ${m[1]}-${m[2]}: 책다락이 일주일 쉬었다 열었다`, details: [], effects: { bookshop: null } }] });
+      } else if (sys.includes("'s memory. Rewrite the dated facts")) {
+        text = "day 2 (Tuesday) 오후 윤은 휴무인 책다락에서 하루에게 민수의 『달빛 고양이』 두 권을 직접 건넸다.";
       } else if (sys.includes("Choose who lives in full")) {
         text = JSON.stringify({ main: ["haru"], why: { haru: "holds the errand" } });
       } else if (sys.includes("check a story event")) {
@@ -461,5 +463,27 @@ describe("attention (docs/10 T10)", () => {
     // back to living in full
     applyAttention(w, cards, ["haru", "yoon"]);
     expect(w.character("yoon").tier).toBe("main");
+  });
+});
+
+describe("fold (docs/10 T6, 30-day re-measure)", () => {
+  it("folds old dated facts from the character's own point of view and labels the paragraph with its day range", async () => {
+    const llm = fakeWorldLLM();
+    const yoonCard = { ...findCharacter("haru"), id: "yoon", name: { ko: "윤", ja: "ユン", en: "Yoon" } };
+    const w = World.create(def);
+    w.setClock(31);
+    const session = new ChatSession({ card: yoonCard, lang: "ko", provider: llm, persona: { name: "민수" }, memory: { enabled: false } });
+    const facts = [];
+    for (let d = 1; d <= 30; d++) facts.push({ text: d === 2 ? "하루가 휴무인 책다락에서 윤 사장에게 민수의 책 두 권을 받아 갔다" : `day ${d}의 일`, source: d % 3 === 0 ? ("told" as const) : ("witnessed" as const), ...(d % 3 === 0 ? { by: "선영" } : {}), day: d });
+    session.memory = { ...session.memory, summary: "민수는 몇 번 들른 손님이다.", facts };
+    const r = await compactWorldFacts(session, w, { provider: llm }, { maxFacts: 10, keepDays: 7 });
+    expect(r.folded).toBe(23); // days 1-23 are older than 7 days on day 31
+    const sys = llm.systems[llm.systems.length - 1]!;
+    expect(sys).toContain("You compress 윤's memory");
+    expect(sys).toContain("never turn something 윤 was there for into something 윤 only heard about");
+    expect(session.memory.summary).toContain("[days 1-23] day 2 (Tuesday) 오후 윤은");
+    expect(session.memory.summary.startsWith("민수는 몇 번 들른 손님이다.")).toBe(true);
+    expect(session.memory.facts).toHaveLength(7);
+    expect(session.memory.facts.every((f) => (f.day ?? 0) > 23)).toBe(true);
   });
 });

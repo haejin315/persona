@@ -45,11 +45,12 @@ export async function compactWorldFacts(
   const old = dated.filter((f) => world.day - (f.day ?? world.day) > keepDays);
   if (!old.length) return { folded: 0 };
   const lines = old.map((f) => `- day ${f.day} (${world.weekdayOf(f.day!)}): ${f.text} [${f.source}${f.by ? `:${f.by}` : ""}]`).join("\n");
+  const name = session.card.name[session.lang] ?? session.card.id;
   const res = await llm.provider.generate(
     [
       {
         role: "system",
-        content: `You compress a character's memory. Rewrite the dated facts below as 2-5 sentences of past-tense summary in the same language as the facts, keeping every proper noun, number, weekday and who-told-whom, dropping nothing that would matter a month later. Date each thing exactly as "day N (Weekday)" with the Latin word day and the day number (the character's clock counts days the same way: today is day ${world.day}); never a bare weekday and never a calendar-style "N일", which read as a recent date months later. Output only the new paragraph for these facts; do not repeat the existing summary.`,
+        content: `You compress ${name}'s memory. Rewrite the dated facts below as 2-5 sentences of past-tense summary in the same language as the facts, keeping every proper noun, number, weekday and who-told-whom, dropping nothing that would matter a month later. Date each thing exactly as "day N (Weekday)" with the Latin word day and the day number (the character's clock counts days the same way: today is day ${world.day}); never a bare weekday and never a calendar-style "N일", which read as a recent date months later. Write it from ${name}'s side, as ${name}'s own memory: a fact marked [witnessed] is something ${name} was there for or did, so it stays ${name}'s own doing or seeing ("${name} handed Haru the two volumes", not "Haru received two volumes"); a fact marked [told:X] stays attributed to X; never turn something ${name} was there for into something ${name} only heard about. Output only the new paragraph for these facts; do not repeat the existing summary.`,
       },
       { role: "user", content: `EXISTING SUMMARY:\n${session.memory.summary || "(none)"}\n\nFACTS TO FOLD IN:\n${lines}` },
     ],
