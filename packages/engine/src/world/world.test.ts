@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findCharacter } from "../characters.js";
 import type { LLMProvider } from "../providers/types.js";
 import { ChatSession } from "../session.js";
-import { advanceDay, catchUp, extractTasks, newsFor } from "./llm.js";
+import { advanceDay, applyAttention, catchUp, decideAttention, extractTasks, newsFor } from "./llm.js";
 import { syncCharacter } from "./sync.js";
 import { World, type WorldFile } from "./world.js";
 
@@ -46,6 +46,8 @@ const fakeWorldLLM = (opts: { errand?: "done" | "failed" } = {}): LLMProvider & 
       } else if (sys.includes("pass with nobody watching")) {
         const m = sys.match(/Days (\d+) to (\d+)/)!;
         text = JSON.stringify({ events: [{ day: Number(m[1]) + 1, slot: "afternoon", where: "bookshop", who: ["yoon"], scope: "regional", result: `days ${m[1]}-${m[2]}: 책다락이 일주일 쉬었다 열었다`, details: [], effects: { bookshop: null } }] });
+      } else if (sys.includes("Choose who lives in full")) {
+        text = JSON.stringify({ main: ["haru"], why: { haru: "holds the errand" } });
       } else if (sys.includes("check a story event")) {
         text = JSON.stringify({ ok: true, problems: [] });
       } else if (sys.includes("did an errand")) {
@@ -429,5 +431,35 @@ describe("World + model + session", () => {
     expect(texts).toContain("신맛이 덜하다");
     expect(texts).not.toContain("기사가 길이 막혔다고 했다");
     expect(texts.some((x) => x.includes("우유가 늦었다"))).toBe(true);
+  });
+});
+
+describe("attention (docs/10 T10)", () => {
+  const cards = { haru: findCharacter("haru"), yoon: findCharacter("yoon") };
+
+  it("one call names who lives in full; the others become background extras with a sketch, and a rumour still reaches them", async () => {
+    const w = World.create(def);
+    w.state.lastSeen.haru = 1;
+    w.addTask({ assignee: "haru", what: "책다락에 가서 민수의 책을 받아 온다", where: "bookshop", dueDay: 2, from: "민수" });
+    const llm = fakeWorldLLM();
+    const usage = { promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0, calls: 0 };
+    const d = await decideAttention(w, { llm: { provider: llm }, lang: "ko", cards, persona: { name: "민수" }, recentChats: [{ characterId: "haru", day: 1, transcript: "민수: 책 좀 받아다 주세요\n하루: 네." }] }, { daysAway: 7, cap: 2 }, usage);
+    expect(d.main).toEqual(["haru"]);
+    expect(d.why.haru).toBe("holds the errand");
+    expect(usage.calls).toBe(1);
+    const sys = llm.systems.find((s) => s.includes("Choose who lives in full"))!;
+    expect(sys).toContain("책다락에 가서 민수의 책을 받아 온다");
+    expect(sys).toContain("Last spoke with 민수: day 1 (0 days ago)");
+    expect(sys).toContain("민수: 책 좀 받아다 주세요");
+    expect(w.character("haru").tier).toBe("main");
+    expect(w.character("yoon").tier).toBe("named");
+    expect(w.character("yoon").sketch).toBe(cards.yoon.identity.role);
+    // background characters with a card still hear what goes around town (zero calls)
+    w.record({ day: 1, slot: "afternoon", where: "bookshop", who: ["haru"], scope: "world", result: "책다락 앞 골목이 파였다", details: [], knownBy: { haru: { source: "witnessed" } }, origin: "catchup" });
+    await advanceDay(w, { llm: { provider: llm }, lang: "ko", cards, persona: { name: "민수" }, verifier: null });
+    expect(w.state.ledger.find((e) => e.result === "책다락 앞 골목이 파였다")!.knownBy.yoon).toEqual({ source: "rumor" });
+    // back to living in full
+    applyAttention(w, cards, ["haru", "yoon"]);
+    expect(w.character("yoon").tier).toBe("main");
   });
 });

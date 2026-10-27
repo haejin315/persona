@@ -458,6 +458,90 @@ export interface AdvanceDeps {
   sceneNews?: boolean;
   /** The day the user is back (known when a gap is being lived). Scenes and world days then know nothing of the user's can be settled before it. */
   userBackDay?: number;
+  /** The last conversation each character had with the user (for decideAttention): what was said is what connects them. */
+  recentChats?: RecentChat[];
+}
+
+export interface RecentChat {
+  characterId: string;
+  day: number;
+  /** The conversation's text, "Name: line" per turn, already trimmed. */
+  transcript: string;
+}
+
+export interface AttentionDecision {
+  /** Characters who live in full while the user is away. */
+  main: string[];
+  why: Record<string, string>;
+}
+
+/** Set the tiers: `main` live in full, every other character with a card lives in the background (a few lines, like any extra). */
+export function applyAttention(world: World, cards: Record<string, CharacterCard>, main: string[]): void {
+  for (const c of Object.values(world.state.characters)) {
+    if (!cards[c.id]) continue;
+    if (main.includes(c.id)) c.tier = "main";
+    else {
+      c.tier = "named";
+      c.sketch ??= cards[c.id]!.identity.role;
+    }
+  }
+}
+
+/**
+ * Who lives in full while the user is away (docs/10 T10). Not a rule: one call reads what the user
+ * said lately, the pending errands and the user's things, and names the characters whose days must
+ * be lived (meetings written, errands run) because what happens to them can reach the user on
+ * return. The rest live in the background at no cost: they still hear what goes around town, and
+ * nothing the user could have known is lost. The only rule is the cap.
+ */
+export async function decideAttention(
+  world: World,
+  deps: AdvanceDeps,
+  args: { daysAway: number; cap: number },
+  usage: WorldCallUsage = emptyWorldUsage(),
+): Promise<AttentionDecision> {
+  const user = deps.persona?.name ?? "the user";
+  const backDay = world.day + args.daysAway;
+  const chars = Object.values(world.state.characters)
+    .filter((c) => deps.cards[c.id])
+    .map((c) => {
+      const card = deps.cards[c.id]!;
+      const last = world.state.lastSeen[c.id];
+      const routine = SLOTS.map((s) => `${s}: ${c.routine[s] ? world.place(c.routine[s]!).name : "-"}`).join(", ");
+      return `- ${c.name}${c.aka?.length ? ` (also called ${c.aka.join(", ")})` : ""} [id ${c.id}]: ${card.identity.role}. Usually ${routine}. Last spoke with ${user}: ${last === undefined ? "never" : `day ${last} (${world.day - last} days ago)`}.`;
+    })
+    .join("\n");
+  const tasks = world.state.tasks
+    .filter((t) => t.status === "pending")
+    .map((t) => `- ${world.character(t.assignee).name} [id ${t.assignee}]: ${t.what} @${t.where ? world.place(t.where).name : "?"} day ${t.dueDay}`)
+    .join("\n");
+  const things = Object.entries(world.state.user)
+    .map(([k, v]) => `- ${k}: ${v}`)
+    .join("\n");
+  const chats = (deps.recentChats ?? [])
+    .map((c) => `## ${world.character(c.characterId).name} [id ${c.characterId}], day ${c.day}\n${c.transcript}`)
+    .join("\n\n");
+  const system = [
+    `You run the off-screen world of a quiet slice-of-life story while ${user} is away for ${args.daysAway} days (back on day ${backDay}). Living a character's days in full costs money: their meetings are written and their errands run. Living them in the background costs nothing: they are still heard of, and still hear what goes around town.`,
+    `Choose who lives in full: the characters whose days can reach ${user} on return - through an errand ${user} asked for or that passes through them, a plan ${user} made with or about them, something of ${user}'s in their keeping, or because ${user} will plainly be seeing them soon. Leave out people ${user} only passes by. At most ${args.cap}; fewer is better when nothing connects a character to ${user}.`,
+    `# CHARACTERS\n${chars}`,
+    `# PENDING ERRANDS\n${tasks || "(none)"}`,
+    `# ${user.toUpperCase()}'S THINGS IN THE WORLD\n${things || "(nothing recorded)"}`,
+    chats ? `# RECENT CONVERSATIONS WITH ${user.toUpperCase()}\n${chats}` : "",
+    `Output JSON only: {"main": ["id", ...], "why": {"id": "one short line: what connects them to ${user}"}}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const res = await deps.llm.provider.generate([{ role: "system", content: system }, { role: "user", content: "Decide." }], { model: deps.llm.model, temperature: 0, maxTokens: 400 });
+  add(usage, res);
+  const parsed = safeJson(res.text) ?? {};
+  const known = new Set(Object.values(world.state.characters).filter((c) => deps.cards[c.id]).map((c) => c.id));
+  const main = strs(parsed.main).filter((id) => known.has(id)).slice(0, Math.max(1, args.cap));
+  const why: Record<string, string> = {};
+  if (parsed.why && typeof parsed.why === "object") for (const [k, v] of Object.entries(parsed.why)) if (known.has(k) && typeof v === "string") why[k] = v;
+  // an unreadable answer changes nothing: the tiers stay as they are
+  if (main.length) applyAttention(world, deps.cards, main);
+  return { main: main.length ? main : Object.values(world.state.characters).filter((c) => c.tier === "main" && deps.cards[c.id]).map((c) => c.id), why };
 }
 
 /** What a character knows: live memory facts plus everything the ledger says reached them. */
@@ -510,7 +594,8 @@ function spreadRumours(world: World, deps: AdvanceDeps, events: WorldEvent[]): v
     if (e.scope === "personal" || e.origin === "chat") continue;
     const region = world.place(e.where).region;
     for (const c of Object.values(world.state.characters)) {
-      if (c.tier !== "main" || !deps.cards[c.id] || e.knownBy[c.id]) continue;
+      // anyone with a card hears, main or not: a character living in the background (T10) still knows what goes around town
+      if (!deps.cards[c.id] || e.knownBy[c.id]) continue;
       const passes = e.scope === "world" || (!!region && Object.values(c.routine).some((pid) => pid && world.place(pid).region === region));
       if (passes) e.knownBy[c.id] = { source: "rumor" };
     }

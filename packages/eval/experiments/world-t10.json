@@ -1,0 +1,18 @@
+{
+  "scenarioId": "t10-attention",
+  "arms": [
+    { "id": "attn-llm/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "attention": "llm" },
+    { "id": "attn-rule/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true, "attention": "rule" },
+    { "id": "all-5/sonnet", "promptVersion": "v13-structured", "model": "claude-cli:sonnet", "worldSync": true }
+  ],
+  "repeats": 2,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "worldModel": "claude-cli:sonnet",
+  "verifierModel": "claude-cli:haiku",
+  "judgeModel": "claude-cli:opus",
+  "eventsPerDay": 1,
+  "attentionCap": 3,
+  "replayArmId": "none",
+  "outDir": "eval-results/world-t10"
+}

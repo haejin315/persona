@@ -8,8 +8,10 @@ import {
   ChatSession,
   World,
   advanceDay,
+  applyAttention,
   catchUp,
   compactWorldFacts,
+  decideAttention,
   emptyWorldUsage,
   extractTasks,
   findCharacter,
@@ -23,6 +25,7 @@ import {
   type TokenUsage,
   type Turn,
   type WorldBlock,
+  type RecentChat,
   type WorldCallUsage,
   type WorldEvent,
   type WorldState,
@@ -137,6 +140,12 @@ export interface WorldArm extends Arm {
   sceneNews?: boolean;
   /** Which of the world's characters are main for this arm (docs/10 T8); the others become named extras. Default: as the world file says. */
   mains?: string[];
+  /**
+   * Who lives in full while the user is away (docs/10 T10): "llm" asks one call before each absence
+   * (what the user said lately, the errands, the user's things); "rule" keeps whoever the user spoke to
+   * in the last 7 days or who holds a pending errand. Default: everyone the world file calls main.
+   */
+  attention?: "llm" | "rule";
 }
 
 export interface WorldRunConfig {
@@ -157,6 +166,8 @@ export interface WorldRunConfig {
   eventsPerSpan?: number;
   /** Fold ledger facts older than 7 days into the summary when a character carries more than this many (default 25). */
   maxFacts?: number;
+  /** Most characters an `attention: "llm"` arm may keep living in full (default 3). */
+  attentionCap?: number;
   judgeModel?: string;
   outDir: string;
   /** Arm whose user turns and world the other arms replay (default: the first arm). "none" = every arm runs its own world. */
@@ -181,7 +192,19 @@ export type PhaseRecord =
       /** Tasks extracted from this chat (source arm only). */
       tasks: string[];
     }
-  | { index: number; kind: "advance"; fromDay: number; toDay: number; events: WorldEvent[]; usage: WorldCallUsage; worldAfter: WorldState; dayByDay?: number; inSpans?: number }
+  | {
+      index: number;
+      kind: "advance";
+      fromDay: number;
+      toDay: number;
+      events: WorldEvent[];
+      usage: WorldCallUsage;
+      worldAfter: WorldState;
+      dayByDay?: number;
+      inSpans?: number;
+      /** Who lived in full during this absence and why (attention arms). */
+      attention?: { mode: "llm" | "rule"; main: string[]; why: Record<string, string> };
+    }
   | { index: number; kind: "event"; day: number; event: WorldEvent };
 
 export interface WorldRecord {
@@ -259,8 +282,16 @@ export async function runWorldConversation(
       }
     }
   }
+  // Every character with a card gets it: attention arms move characters between main and background
+  // during the run, and a background character with a card still hears rumours (zero calls).
   const cards: Record<string, CharacterCard> = {};
-  for (const c of Object.values(world.state.characters)) if (c.tier === "main") cards[c.id] = findCharacter(c.id);
+  for (const c of Object.values(world.state.characters)) {
+    try {
+      cards[c.id] = findCharacter(c.id);
+    } catch {
+      if (c.tier === "main") throw new Error(`world ${world.state.id}: main character "${c.id}" has no card`);
+    }
+  }
 
   const sessions = new Map<string, ChatSession>();
   const usage = { character: emptyTotals(), simulator: emptyTotals(), memory: emptyTotals(), world: emptyTotals() };
@@ -288,6 +319,7 @@ export async function runWorldConversation(
       const wu = emptyWorldUsage();
       let events: WorldEvent[] = [];
       let tiers: { dayByDay?: number; inSpans?: number } = {};
+      let attention: { mode: "llm" | "rule"; main: string[]; why: Record<string, string> } | undefined;
       if (source) {
         // Same world as the source arm: copy its ledger and clock, keep this arm's sync bookkeeping.
         const src = source.phases[i];
@@ -297,7 +329,25 @@ export async function runWorldConversation(
       } else {
         const memories: Record<string, MemoryState> = {};
         for (const [cid, s] of sessions) memories[cid] = s.memory;
-        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan, sceneNews: arm.sceneNews, userBackDay: world.day + p.days };
+        const recentChats: RecentChat[] = [];
+        for (const ph of [...phases].reverse()) {
+          if (ph.kind !== "chat" || recentChats.some((c) => c.characterId === ph.characterId)) continue;
+          const name = cards[ph.characterId]?.name[scenario.lang] ?? ph.characterId;
+          recentChats.push({ characterId: ph.characterId, day: ph.day, transcript: ph.turns.slice(-12).map((t) => `${t.role === "user" ? scenario.persona.name : name}: ${t.content}`).join("\n") });
+        }
+        const deps = { llm: worldLLM, verifier: verifierLLM, lang: scenario.lang, cards, memories, persona: scenario.persona, usage: wu, eventsPerDay: cfg.eventsPerDay, eventsPerSpan: cfg.eventsPerSpan, sceneNews: arm.sceneNews, userBackDay: world.day + p.days, recentChats };
+        if (arm.attention === "llm") {
+          const d = await decideAttention(world, deps, { daysAway: p.days, cap: cfg.attentionCap ?? 3 }, wu);
+          attention = { mode: "llm", ...d };
+        } else if (arm.attention === "rule") {
+          // the rule docs/10 wrote down before T10: spoken to in the last 7 days, or holding a pending errand
+          const main = Object.keys(cards).filter((cid) => {
+            const last = world.state.lastSeen[cid];
+            return (last !== undefined && world.day - last <= 7) || world.state.tasks.some((t) => t.status === "pending" && t.assignee === cid);
+          });
+          applyAttention(world, cards, main);
+          attention = { mode: "rule", main, why: {} };
+        }
         if (p.days > (cfg.recentDays ?? 7)) {
           const r = await catchUp(world, { ...deps, recentDays: cfg.recentDays, spanDays: cfg.spanDays }, p.days);
           events.push(...r.events);
@@ -309,8 +359,8 @@ export async function runWorldConversation(
       }
       addUsage(usage.world, { promptTokens: wu.promptTokens, completionTokens: wu.completionTokens, cachedPromptTokens: wu.cachedPromptTokens }, wu.model);
       usage.world.calls += wu.calls - 1; // addUsage counted one call
-      phases.push({ index: i, kind: "advance", fromDay, toDay: world.day, events, usage: wu, worldAfter: world.snapshot(), ...tiers });
-      log(`  ${id}: day ${fromDay} → ${world.day}, ${events.length} event(s), ${wu.calls} world call(s)${tiers.inSpans ? ` (${tiers.inSpans} days in spans, ${tiers.dayByDay} day by day)` : ""}`);
+      phases.push({ index: i, kind: "advance", fromDay, toDay: world.day, events, usage: wu, worldAfter: world.snapshot(), ...tiers, ...(attention ? { attention } : {}) });
+      log(`  ${id}: day ${fromDay} → ${world.day}, ${events.length} event(s), ${wu.calls} world call(s)${tiers.inSpans ? ` (${tiers.inSpans} days in spans, ${tiers.dayByDay} day by day)` : ""}${attention ? `; lived in full (${attention.mode}): ${attention.main.join(", ") || "(nobody)"}` : ""}`);
       continue;
     }
 
@@ -631,6 +681,7 @@ export function worldReport(records: WorldRecord[], scores: WorldScoreRecord[], 
         const rumours = p.worldAfter.ledger.filter((x) => x.day >= p.fromDay && x.day < p.toDay && Object.values(x.knownBy).some((k) => k.source === "rumor")).length;
         const conds = Object.entries(p.worldAfter.conditions ?? {}).map(([k, v]) => `${k}: ${v}`).join("; ");
         const ustate = Object.entries(p.worldAfter.user ?? {}).map(([k, v]) => `${k}: ${v}`).join("; ");
+        if (p.attention) lines.push(`- lived in full (${p.attention.mode}): ${p.attention.main.join(", ") || "(nobody)"}${Object.keys(p.attention.why).length ? ` — ${Object.entries(p.attention.why).map(([k, v]) => `${k}: ${v}`).join("; ")}` : ""}`);
         lines.push(
           `- advance day ${p.fromDay} → ${p.toDay}: ${p.events.length} events (${p.events.filter((x) => x.origin === "world" || x.origin === "span").length} world, ${scenes} scenes, ${told} told lines, ${rumours} heard as rumour), ${p.usage.calls} world calls${p.inSpans ? ` (${p.inSpans} days in spans, ${p.dayByDay} day by day)` : ""}; conditions after: ${conds || "all usual"}${ustate ? `; ${r.persona.name}'s things: ${ustate}` : ""}`,
         );
