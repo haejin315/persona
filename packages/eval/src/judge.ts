@@ -1,5 +1,6 @@
 import { findCharacter, normalizeMemory, renderFact, type CharacterCard, type Lang, type LLMProvider, type MemoryState, type Turn } from "@persona/engine";
 import { checkFormat, formatScore } from "./format.js";
+import { withRetry } from "./retry.js";
 import { findScenario } from "./scenarios.js";
 import { METRICS, type CheckpointScore, type ConversationRecord, type Metric, type ProbeResult, type Scenario, type ScoreRecord } from "./types.js";
 
@@ -64,10 +65,11 @@ function userTurnsBefore(turns: Turn[], turnIndex: number): number {
 /**
  * Everything the user has said so far, speech only. The cap used to be 6,000 chars, which a 200-turn
  * run exceeds around turn 120; the judge then saw only the recent part and marked a detail the user
- * gave at turn 59 as "invented" at turn 400 (docs/02). 200 user turns are ~20k chars, so the cap is
- * now well above that and exists only as a safety net.
+ * gave at turn 59 as "invented" at turn 400 (docs/02). 200 user turns are ~20k chars and 1000 user
+ * turns were 79k on the first 1000-turn run (docs/12), so the cap is above that and exists only as a
+ * safety net. (Anything this long leaves the command line: the CLI provider passes it as a file.)
  */
-export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 60000): string {
+export function userSaidBefore(turns: Turn[], beforeIndex: number, maxChars = 120000): string {
   const lines = turns
     .filter((t) => t.role === "user" && t.index < beforeIndex)
     .map((t) => `[turn ${t.index}] ${t.content.replace(/\*[^*]*\*/g, "").replace(/\s+/g, " ").trim()}`)
@@ -130,11 +132,12 @@ Respond with JSON only:
 }
 
 async function askJson(provider: LLMProvider, model: string | undefined, system: string, user: string): Promise<any> {
-  const res = await provider.generate([{ role: "system", content: system }, { role: "user", content: user }], {
-    model,
-    temperature: 0,
-    maxTokens: 400,
-  });
+  // Same retry as a user turn: a 1000-turn judge is 130 calls and must not die on one rate limit.
+  const res = await withRetry(
+    () => provider.generate([{ role: "system", content: system }, { role: "user", content: user }], { model, temperature: 0, maxTokens: 400 }),
+    () => {},
+    (m) => console.log(`  judge ${m}`),
+  );
   const m = res.text.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {

@@ -2,6 +2,7 @@ import { ChatSession, bigramEmbedder, findCharacter, localEmbedder, observedProv
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BudgetExceededError, BudgetTracker, trackedProvider } from "./budget.js";
+import { withRetry } from "./retry.js";
 import { costOf } from "./pricing.js";
 import { resolveProvider } from "./providers.js";
 import { findScenario } from "./scenarios.js";
@@ -14,30 +15,6 @@ function embedderFor(kind: "local" | "bigram" = "local"): Embedder {
   let e = embedders.get(kind);
   if (!e) embedders.set(kind, (e = kind === "bigram" ? bigramEmbedder() : localEmbedder()));
   return e;
-}
-
-/**
- * A 1000-turn run is five hours of calls; one failed call must not throw it away. Rate-limit errors
- * wait five minutes and retry for up to three hours (the subscription window resets); anything else
- * retries twice after 20 s. `undo` puts the session back as it was before the attempt.
- */
-async function withRetry<T>(fn: () => Promise<T>, undo: () => void, log?: (msg: string) => void): Promise<T> {
-  let limited = 0;
-  let other = 0;
-  for (;;) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (e instanceof BudgetExceededError) throw e;
-      const msg = String((e as Error)?.message ?? e);
-      const rateLimited = Boolean((e as { rateLimited?: boolean })?.rateLimited) || /limit|rate|overloaded|429|529/i.test(msg);
-      if (rateLimited ? ++limited > 36 : ++other > 2) throw e;
-      undo();
-      const waitMs = rateLimited ? 5 * 60_000 : 20_000;
-      log?.(`retry in ${waitMs / 1000}s after: ${msg.slice(0, 160)}`);
-      await new Promise((res) => setTimeout(res, waitMs));
-    }
-  }
 }
 
 export interface RunHooks {

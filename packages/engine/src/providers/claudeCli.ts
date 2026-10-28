@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ChatMessage } from "../types.js";
 import type { GenerateOptions, GenerateResult, LLMProvider } from "./types.js";
@@ -19,6 +22,32 @@ import type { GenerateOptions, GenerateResult, LLMProvider } from "./types.js";
  * `thinking: "off"` is honoured only by models that are not adaptive (Sonnet 5.5 and later always
  * think); a pinned claude-sonnet-4-6 answers without a thinking block (docs/11).
  */
+/**
+ * Longest system prompt passed as a command-line argument. Windows caps a whole command line at
+ * 32,767 UTF-16 units; the 1000-turn judge (docs/12), whose rubric carries everything the user said,
+ * crashed `spawn` with ENAMETOOLONG. Above this the prompt goes through a temp file and
+ * `--system-prompt-file`, which the CLI reads at start-up; the file is removed when the process ends.
+ */
+export const SYSTEM_PROMPT_ARGV_MAX = 20_000;
+let tmpSeq = 0;
+export function systemPromptArgs(system: string, max = SYSTEM_PROMPT_ARGV_MAX): { args: string[]; cleanup: () => void } {
+  const none = () => {};
+  if (!system) return { args: [], cleanup: none };
+  if (system.length <= max) return { args: ["--system-prompt", system], cleanup: none };
+  const file = join(tmpdir(), `persona-system-${process.pid}-${tmpSeq++}.txt`);
+  writeFileSync(file, system, "utf8");
+  return {
+    args: ["--system-prompt-file", file],
+    cleanup: () => {
+      try {
+        unlinkSync(file);
+      } catch {
+        /* already gone */
+      }
+    },
+  };
+}
+
 export class ClaudeCliProvider implements LLMProvider {
   readonly id = "claude-cli";
   readonly defaultModel: string;
@@ -63,11 +92,13 @@ export class ClaudeCliProvider implements LLMProvider {
     const key = s.warmKey(model, system, opts?.thinking);
     if (s.warm && s.warm.key === key && !s.warm.failed && s.warm.child.exitCode === null) return;
     s.dispose();
-    const child = spawn(s.bin, [...s.args(model, system, "stream-json"), "--input-format", "stream-json"], { env: s.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"] });
+    const a = s.args(model, system, "stream-json");
+    const child = spawn(s.bin, [...a.args, "--input-format", "stream-json"], { env: s.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"] });
     const warm = { child, key, stderr: "", failed: false };
     child.stderr.setEncoding("utf8").on("data", (d) => (warm.stderr += d));
     child.on("error", () => (warm.failed = true));
     child.on("exit", () => (warm.failed = true));
+    child.once("close", a.cleanup);
     // A waiting process must not keep the parent alive (an eval run ends when its work ends).
     child.unref();
     for (const st of [child.stdout, child.stderr, child.stdin]) sock(st).unref();
@@ -87,11 +118,11 @@ export class ClaudeCliProvider implements LLMProvider {
     if (w.child.exitCode === null) w.child.kill();
   }
 
-  private args(model: string, system: string, format: "json" | "stream-json"): string[] {
+  private args(model: string, system: string, format: "json" | "stream-json"): { args: string[]; cleanup: () => void } {
     const args = ["-p", "--output-format", format, "--model", model, "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--exclude-dynamic-system-prompt-sections", "--no-session-persistence", "--max-turns", "1"];
     if (format === "stream-json") args.push("--verbose", "--include-partial-messages");
-    if (system) args.push("--system-prompt", system);
-    return args;
+    const sys = systemPromptArgs(system);
+    return { args: [...args, ...sys.args], cleanup: sys.cleanup };
   }
 
   private env(thinking?: "off" | "adaptive"): NodeJS.ProcessEnv {
@@ -110,7 +141,7 @@ export class ClaudeCliProvider implements LLMProvider {
   async generate(messages: ChatMessage[], opts?: GenerateOptions): Promise<GenerateResult> {
     const model = opts?.model ?? this.defaultModel;
     const { system, prompt } = foldMessages(messages);
-    const args = this.args(model, system, "json");
+    const { args, cleanup } = this.args(model, system, "json");
     const env = this.env(opts?.thinking);
 
     const t0 = Date.now();
@@ -120,8 +151,12 @@ export class ClaudeCliProvider implements LLMProvider {
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (d) => (stdout += d));
       child.stderr.setEncoding("utf8").on("data", (d) => (stderr += d));
-      child.on("error", reject);
+      child.on("error", (e) => {
+        cleanup();
+        reject(e);
+      });
       child.on("close", (code) => {
+        cleanup();
         if (code === 0) resolve(stdout);
         else reject(new Error(`claude exited ${code}: ${stderr || stdout}`.slice(0, 500)));
       });
@@ -160,7 +195,9 @@ export class ClaudeCliProvider implements LLMProvider {
       if (opts?.signal) opts.signal.addEventListener("abort", () => child.kill(), { once: true });
       child.stdin!.end(`${JSON.stringify({ type: "user", message: { role: "user", content: prompt } })}\n`, "utf8");
     } else {
-      child = spawn(s.bin, s.args(model, system, "stream-json"), { env: s.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"], signal: opts?.signal });
+      const a = s.args(model, system, "stream-json");
+      child = spawn(s.bin, a.args, { env: s.env(opts?.thinking), stdio: ["pipe", "pipe", "pipe"], signal: opts?.signal });
+      child.once("close", a.cleanup);
       child.stderr!.setEncoding("utf8").on("data", (d) => (stderr += d));
       child.stdin!.end(prompt, "utf8");
     }

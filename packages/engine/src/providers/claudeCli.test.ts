@@ -1,5 +1,20 @@
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { newStreamState, parseStreamLine } from "./claudeCli.js";
+import { newStreamState, parseStreamLine, systemPromptArgs } from "./claudeCli.js";
+
+describe("claude-cli system prompt argument (docs/12)", () => {
+  it("passes a short prompt on the command line and a long one through a temp file that cleanup removes", () => {
+    expect(systemPromptArgs("")).toMatchObject({ args: [] });
+    expect(systemPromptArgs("짧다", 10).args).toEqual(["--system-prompt", "짧다"]);
+    const long = "민수는 보리를 키운다. ".repeat(10);
+    const { args, cleanup } = systemPromptArgs(long, 50);
+    expect(args[0]).toBe("--system-prompt-file");
+    expect(readFileSync(args[1]!, "utf8")).toBe(long);
+    cleanup();
+    expect(existsSync(args[1]!)).toBe(false);
+    cleanup(); // idempotent
+  });
+});
 
 describe("claude-cli stream-json parsing (docs/11)", () => {
   it("yields text deltas only, skips thinking, and keeps the result event", () => {
