@@ -121,6 +121,8 @@ export interface Turn {
      * conversation window does not read as one continuous sitting (docs/10 T2).
      */
     boundary?: string;
+    /** Archive entries shown next to MEMORY for this reply, with their match score (docs/12). */
+    recalled?: { text: string; score: number; why: "entity" | "vector" }[];
   };
 }
 
@@ -145,6 +147,19 @@ export interface Fact {
   day?: number;
   /** The fact is about the user's things or a promise to the user (from an event's userEffects): the character brings it up unasked. */
   about?: "user";
+}
+
+/**
+ * A fact as the summariser first stated it, kept for good in `MemoryState.archive` (docs/12). The
+ * prompt's fact list is capped and merges entries; the archive is append-only and uncapped, so a
+ * detail the list had to drop can still be found and shown when it fits the moment.
+ */
+export interface ArchivedFact extends Fact {
+  /** Transcript turns the fact was extracted from. */
+  turnFrom: number;
+  turnTo: number;
+  /** Proper nouns in the fact (people, pets, places, shops, titles): the exact index for recall. */
+  entities?: string[];
 }
 
 /** Accept a stored fact in either shape (old recordings hold plain strings). */
@@ -204,6 +219,8 @@ export interface MemoryState {
   relationship: { stage: string; notes: string[] };
   /** Turn index up to which the summary/facts are current. */
   coveredUpTo: number;
+  /** Every fact ever extracted, uncapped (memory rules v4); absent on older recordings. */
+  archive?: ArchivedFact[];
 }
 
 export const emptyMemory = (): MemoryState => ({

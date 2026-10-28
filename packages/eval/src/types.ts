@@ -68,7 +68,13 @@ export interface Arm {
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in
    * context instead of a summary.
    */
-  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3"; maxFacts?: number };
+  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4"; maxFacts?: number };
+  /**
+   * Recall from the fact archive before each reply (docs/12; needs memory rules v4). `embedder`
+   * "local" = multilingual-e5-small through transformers.js on the CPU (default), "bigram" = hashed
+   * character n-grams, no model (offline baseline and tests).
+   */
+  recall?: { k?: number; minScore?: number; embedder?: "local" | "bigram" };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };
 }

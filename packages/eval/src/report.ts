@@ -19,6 +19,32 @@ export interface ArmSummary {
   /** Mean per-metric score at each checkpoint turn, to see drift over the conversation. */
   drift: Array<{ turnIndex: number } & Record<Metric, number>>;
   tokensPerReply: { prompt: number; cached: number; completion: number };
+  /** Facts in the prompt's list at the end, and in the uncapped archive (memory rules v4, docs/12). */
+  facts: { ledger: number; archive: number };
+  /**
+   * Recall layer (docs/12): mean archive entries shown per reply, and the share of answerable probes
+   * whose expected answer was among the entries shown for that reply (the retrieval's own hit rate,
+   * separate from whether the character then said it).
+   */
+  recall: { perReply: number; probeHit: number };
+}
+
+/** Content words of a probe's expected answer, as judge.ts matches them. */
+const contentWords = (expected: string) =>
+  expected
+    .replace(/\([^)]*\)/g, " ")
+    .split(/[\s,·/]+/)
+    .map((w) => w.replace(/(의|을|를|은|는|이|가|에서|으로|로|과|와)$/u, ""))
+    .filter((w) => w.length >= 2);
+
+/** The character reply to user turn N (1-based count of user turns). */
+function replyToUserTurn(rec: ConversationRecord, userTurn: number) {
+  let seen = 0;
+  for (let i = 0; i < rec.turns.length; i++) {
+    if (rec.turns[i]!.role !== "user") continue;
+    if (++seen === userTurn) return rec.turns.slice(i + 1).find((t) => t.role === "character");
+  }
+  return undefined;
 }
 
 export function summarise(scores: ScoreRecord[], convs: ConversationRecord[]): ArmSummary[] {
@@ -42,6 +68,19 @@ export function summarise(scores: ScoreRecord[], convs: ConversationRecord[]): A
 
     const usages = ss.map((s) => convById.get(s.conversationId)?.usage).filter(Boolean) as ConversationRecord["usage"][];
     const calls = usages.reduce((a, u) => a + u.calls, 0) || 1;
+    const recs = ss.map((s) => convById.get(s.conversationId)).filter(Boolean) as ConversationRecord[];
+    const replies = recs.flatMap((c) => c.turns.filter((t) => t.role === "character"));
+    const probeHits = ss.flatMap((s) => {
+      const rec = convById.get(s.conversationId);
+      if (!rec) return [];
+      return s.probes
+        .filter((p) => p.answerable)
+        .map((p) => {
+          const shown = replyToUserTurn(rec, p.atUserTurn)?.meta?.recalled ?? [];
+          const words = contentWords(p.expected);
+          return shown.some((h) => words.every((w) => h.text.includes(w))) ? 1 : 0;
+        });
+    });
 
     return {
       armId,
@@ -55,20 +94,32 @@ export function summarise(scores: ScoreRecord[], convs: ConversationRecord[]): A
         cached: usages.reduce((a, u) => a + (u.cachedPromptTokens ?? 0), 0) / calls,
         completion: usages.reduce((a, u) => a + u.completionTokens, 0) / calls,
       },
+      facts: {
+        ledger: mean(recs.map((c) => c.memory.facts.length)),
+        archive: mean(recs.map((c) => c.memory.archive?.length ?? 0)),
+      },
+      recall: {
+        perReply: mean(replies.map((t) => t.meta?.recalled?.length ?? 0)),
+        probeHit: mean(probeHits),
+      },
     };
   });
 }
 
 export function toMarkdown(summaries: ArmSummary[], title = "Eval report"): string {
   const out: string[] = [`## ${title}`, ""];
-  out.push(`| arm | n | consistency | memory | style | format | probe recall | tokens/reply (prompt · cached · out) |`);
+  const archive = summaries.some((s) => s.facts.archive > 0);
+  out.push(`| arm | n | consistency | memory | style | format | probe recall | tokens/reply (prompt · cached · out) |${archive ? " facts (list · archive) | recalled/reply · probe in recalled |" : ""}`);
   const unanswerable = summaries.reduce((a, s) => a + s.unanswerableProbes, 0);
-  out.push(`|---|---:|---:|---:|---:|---:|---:|---|`);
+  out.push(`|---|---:|---:|---:|---:|---:|---:|---|${archive ? "---:|---:|" : ""}`);
   for (const s of summaries) {
     const cell = (m: Metric) => `${f1(s.metric[m].mean)} ± ${f1(s.metric[m].sd)}`;
     const t = s.tokensPerReply;
+    const extra = archive
+      ? ` ${Math.round(s.facts.ledger)} · ${Math.round(s.facts.archive)} | ${s.recall.perReply ? `${s.recall.perReply.toFixed(1)} · ${pct(s.recall.probeHit)}` : "–"} |`
+      : "";
     out.push(
-      `| ${s.armId} | ${s.n} | ${cell("consistency")} | ${cell("memory")} | ${cell("style")} | ${cell("format")} | ${pct(s.probeRecall)} | ${Math.round(t.prompt)} · ${Math.round(t.cached)} · ${Math.round(t.completion)} |`,
+      `| ${s.armId} | ${s.n} | ${cell("consistency")} | ${cell("memory")} | ${cell("style")} | ${cell("format")} | ${pct(s.probeRecall)} | ${Math.round(t.prompt)} · ${Math.round(t.cached)} · ${Math.round(t.completion)} |${extra}`,
     );
   }
   if (unanswerable) out.push("", `_${unanswerable} probe(s) excluded from recall: the simulated user never revealed the fact before asking._`);

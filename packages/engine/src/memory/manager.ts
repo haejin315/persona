@@ -1,5 +1,5 @@
 import type { LLMProvider } from "../providers/types.js";
-import { toFact, turnText, type CharacterCard, type Fact, type Lang, type MemoryState, type TokenUsage, type Turn } from "../types.js";
+import { toFact, turnText, type ArchivedFact, type CharacterCard, type Fact, type Lang, type MemoryState, type TokenUsage, type Turn } from "../types.js";
 
 export interface MemoryConfig {
   /** Number of most recent turns kept verbatim in the prompt. */
@@ -19,10 +19,12 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3";
+  rules?: "v1" | "v2" | "v3" | "v4";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
+   * "v4" (docs/12) keeps the v3 list and adds the archive: every fact in the new transcript lines,
+   * stated once with its proper nouns tagged, appended to `memory.archive` uncapped.
    */
   maxFacts?: number;
 }
@@ -80,6 +82,8 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
+    const v3 = this.cfg.rules === "v3" || this.cfg.rules === "v4";
+    const v4 = this.cfg.rules === "v4";
     const transcript = slice
       .map((t) => `${t.role === "user" ? "User" : name}: ${turnText(t)}`)
       .join("\n");
@@ -89,24 +93,36 @@ export class MemoryManager {
       "Given the EXISTING memory and NEW transcript lines, output JSON only:",
       "{",
       `  "summary": "updated running summary, 3-8 sentences, past tense, written in ${LANG_NAME[lang]}",`,
-      this.cfg.rules === "v3"
+      v3
         ? `  "facts": [{"text": "short standalone fact worth remembering verbatim: names, promises, preferences, events, nicknames", "source": "user | self | witnessed | told | rumor", "by": "who told ${name} - only when source is told"}],`
         : '  "facts": ["short standalone facts worth remembering verbatim: names, promises, preferences, events, nicknames"],',
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
+      ...(v4
+        ? [
+            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]}]`,
+          ]
+        : []),
       "}",
       `Keep facts from existing memory unless contradicted. Max ${maxFacts} facts; merge duplicates.`,
       `Attribute every fact to the right person and start it with their name (the user or ${name}). What the user tells ${name} about themselves is a fact about the USER, even when ${name} reacts to it.`,
-      ...(this.cfg.rules === "v2" || this.cfg.rules === "v3"
+      ...(this.cfg.rules === "v2" || v3
         ? [
             `Proper nouns are the memory. A place, person, pet, shop or title the user names is kept verbatim inside a fact, and merging facts never drops a name an earlier fact had. A fact about where someone lives or goes names the place; "moved to a 4th-floor flat" without the neighbourhood is a lost fact.`,
           ]
         : []),
-      ...(this.cfg.rules === "v3"
+      ...(v3
         ? [
             `"source" is how ${name} knows the fact. "user": the user said it to ${name}. "self": ${name} said, promised or decided it (opening hours, habits, promises) - keep these, ${name} must stay consistent with them. "witnessed": it happened in the scene in front of ${name}. "told": a third person told ${name} - put their name in "by". "rumor": heard with no source. A fact keeps the source it already has; repeating a fact does not make it better known.`,
           ]
         : []),
+      ...(v4
+        ? [
+            `"new_facts" is the archive, separate from "facts": every concrete thing the NEW TRANSCRIPT lines state - a name, a number, a date, a title, a place, a preference, a promise, a change of plan - one fact per detail, attributed the same way, names verbatim. Do not merge it with existing memory and do not cap it; it keeps what the ${maxFacts}-fact list has to drop. Tag each with the proper nouns it contains.`,
+          ]
+        : []),
     ].join("\n");
+    // The archive is never shown to the summariser: it is uncapped, and the list it maintains is "facts".
+    const { archive: _archive, ...ledger } = memory;
 
     const res = await this.provider.generate(
       [
@@ -114,10 +130,10 @@ export class MemoryManager {
         {
           role: "user",
           // v1/v2 keep the string shape they were measured with; v3 shows the stored sources.
-          content: `EXISTING MEMORY:\n${JSON.stringify(this.cfg.rules === "v3" ? memory : { ...memory, facts: memory.facts.map((f) => f.text) }, null, 2)}\n\nNEW TRANSCRIPT (turns ${from}-${toExclusive - 1}):\n${transcript}`,
+          content: `EXISTING MEMORY:\n${JSON.stringify(v3 ? ledger : { ...ledger, facts: ledger.facts.map((f) => f.text) }, null, 2)}\n\nNEW TRANSCRIPT (turns ${from}-${toExclusive - 1}):\n${transcript}`,
         },
       ],
-      { model: this.cfg.model, temperature: 0.2, maxTokens: 900 },
+      { model: this.cfg.model, temperature: 0.2, maxTokens: v4 ? 1800 : 900 },
     );
 
     if (res.usage) this.lastUsage = { ...res.usage, model: res.model };
@@ -127,6 +143,19 @@ export class MemoryManager {
     const facts: Fact[] = Array.isArray(parsed.facts)
       ? (parsed.facts as unknown[]).map(toFact).filter((f): f is Fact => !!f).slice(0, maxFacts)
       : memory.facts;
+    const known = new Set((memory.archive ?? []).map((f) => f.text));
+    const fresh: ArchivedFact[] = v4 && Array.isArray(parsed.new_facts)
+      ? (parsed.new_facts as unknown[]).flatMap((raw) => {
+          const f = toFact(raw);
+          if (!f || known.has(f.text)) return [];
+          known.add(f.text);
+          const ents = raw && typeof raw === "object" && Array.isArray((raw as { entities?: unknown }).entities)
+            ? ((raw as { entities: unknown[] }).entities.filter((e): e is string => typeof e === "string" && e.trim().length >= 2).map((e) => e.trim()).slice(0, 8))
+            : [];
+          return [{ ...f, turnFrom: from, turnTo: toExclusive - 1, ...(ents.length ? { entities: ents } : {}) }];
+        })
+      : [];
+    const archive = v4 || memory.archive ? [...(memory.archive ?? []), ...fresh] : undefined;
     const notes = Array.isArray(parsed.relationship?.notes)
       ? parsed.relationship.notes.filter((n: unknown): n is string => typeof n === "string").slice(0, 8)
       : memory.relationship.notes;
@@ -139,6 +168,7 @@ export class MemoryManager {
         notes,
       },
       coveredUpTo: toExclusive - 1,
+      ...(archive ? { archive } : {}),
     };
   }
 }

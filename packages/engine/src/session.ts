@@ -1,5 +1,6 @@
 import { firstSpeechComplete, firstSpeechLine, stripRepeatedOpener } from "./filters.js";
 import { DEFAULT_MEMORY_CONFIG, MemoryManager, type MemoryConfig } from "./memory/manager.js";
+import { Recall, type Embedder, type RecallHit, type RecallOptions } from "./memory/recall.js";
 import { getPromptVersion, type PromptVersion } from "./prompt/builder.js";
 import type { GenerateOptions, LLMProvider } from "./providers/types.js";
 import {
@@ -25,6 +26,12 @@ export interface SessionOptions {
   memoryProvider?: LLMProvider;
   promptVersion?: string;
   memory?: Partial<MemoryConfig>;
+  /**
+   * Recall from the fact archive before each reply (docs/12): the user's latest message is matched
+   * against every fact the summariser ever extracted, and the best few are shown next to MEMORY.
+   * Needs memory rules v4 to fill the archive.
+   */
+  recall?: RecallOptions & { embedder: Embedder };
   model?: string;
   temperature?: number;
   /** Passed to the provider on every reply; "off" answers without extended thinking where the model allows (docs/11). */
@@ -70,6 +77,9 @@ export class ChatSession {
 
   private provider: LLMProvider;
   private memoryManager: MemoryManager;
+  private recall?: Recall;
+  /** Archive entries shown next to MEMORY for the reply being generated (docs/12). */
+  recalled: RecallHit[] = [];
   private model?: string;
   private temperature?: number;
   private thinking?: "off" | "adaptive";
@@ -93,6 +103,10 @@ export class ChatSession {
       ...DEFAULT_MEMORY_CONFIG,
       ...opts.memory,
     });
+    if (opts.recall) {
+      this.recall = new Recall(opts.recall.embedder, opts.recall);
+      void this.recall.warm().catch(() => {});
+    }
   }
 
   /** Mark that time passed before the next user message (world/sync.ts); attached to that turn. */
@@ -118,6 +132,7 @@ export class ChatSession {
       recent: this.memoryManager.recentWindow(this.turns),
       persona: this.persona,
       ...(this.world ? { world: this.world } : {}),
+      ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact) } : {}),
     });
   }
 
@@ -170,10 +185,12 @@ export class ChatSession {
     this.turns = [...snap.turns];
     this.memory = normalizeMemory(structuredClone(snap.memory));
     this.persona = { ...snap.persona };
+    this.recalled = [];
   }
 
   private async generate(opts: GenerateOptions): Promise<Turn> {
     await this.settle();
+    await this.refreshRecall();
     const res = await this.provider.generate(this.buildMessages(), {
       model: this.model,
       temperature: this.temperature,
@@ -187,6 +204,7 @@ export class ChatSession {
       latencyMs: res.latencyMs,
       usage: res.usage,
       ...(filtered.applied.length ? { filters: filtered.applied } : {}),
+      ...this.recalledMeta(),
     });
     this.scheduleConsolidation();
     this.prewarm();
@@ -253,6 +271,7 @@ export class ChatSession {
 
   private async *generateStream(opts: GenerateOptions): AsyncGenerator<string, Turn> {
     await this.settle();
+    await this.refreshRecall();
     let done: Parameters<NonNullable<GenerateOptions["onDone"]>>[0] | undefined;
     // With a filter on, the prefix up to the end of the first spoken line is held back so the
     // filter can edit it before the user sees it; the rest streams through untouched.
@@ -313,6 +332,7 @@ export class ChatSession {
       ...(done?.warm ? { warm: true } : {}),
       usage: done?.usage,
       ...(applied.length ? { filters: applied } : {}),
+      ...this.recalledMeta(),
     });
     this.scheduleConsolidation();
     this.prewarm();
@@ -322,6 +342,7 @@ export class ChatSession {
   private async maybeConsolidate(): Promise<void> {
     if (!this.memoryManager.needsConsolidation(this.turns, this.memory)) return;
     this.memory = await this.memoryManager.consolidate(this.card, this.lang, this.turns, this.memory);
+    if (this.recall && this.memory.archive?.length) await this.recall.index(this.memory.archive); // embeds new entries, off the user's path
     const u = this.memoryManager.lastUsage;
     if (u) {
       this.memoryUsage.promptTokens += u.promptTokens;
@@ -330,6 +351,20 @@ export class ChatSession {
       this.memoryUsage.calls++;
       this.memoryUsage.model = u.model;
     }
+  }
+
+  /** Pick the archive entries that fit the user's latest message (docs/12). One embedding of the query; the rest is a dot product. */
+  private async refreshRecall(): Promise<void> {
+    if (!this.recall) return;
+    const last = [...this.turns].reverse().find((t) => t.role === "user");
+    const archive = this.memory.archive ?? [];
+    this.recalled = last && archive.length ? await this.recall.query(last.content, archive, this.memory.facts) : [];
+  }
+
+  private recalledMeta(): Pick<NonNullable<Turn["meta"]>, "recalled"> {
+    return this.recalled.length
+      ? { recalled: this.recalled.map((h) => ({ text: h.fact.text, score: Math.round(h.score * 1000) / 1000, why: h.why })) }
+      : {};
   }
 
   private push(role: Turn["role"], content: string, meta?: Turn["meta"]): Turn {

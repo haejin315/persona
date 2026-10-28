@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./providers/index.js";
 export * from "./prompt/builder.js";
 export * from "./memory/manager.js";
+export * from "./memory/recall.js";
 export * from "./characters.js";
 export * from "./session.js";
 export * from "./filters.js";

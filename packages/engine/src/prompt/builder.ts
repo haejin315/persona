@@ -5,6 +5,7 @@ import {
   turnText,
   type CharacterCard,
   type ChatMessage,
+  type Fact,
   type Lang,
   type MemoryState,
   type Turn,
@@ -21,6 +22,12 @@ export interface BuildContext {
   persona: UserPersona;
   /** The shared world's present, when the session lives in one (docs/10). Absent = prompt unchanged. */
   world?: WorldBlock;
+  /**
+   * Archive entries recalled for this reply (docs/12). Shown in a per-turn context message with the
+   * same standing as MEMORY, so the static system prompt (and its cache, and the prewarmed process)
+   * stay untouched. Absent = prompt unchanged.
+   */
+  recalled?: Fact[];
 }
 
 export interface PromptVersion {
@@ -215,7 +222,7 @@ A paragraph in MEMORY that starts with [days a-b] is a condensed record of those
 `;
 
 function buildV2(
-  { card, lang, memory, recent, persona, world }: BuildContext,
+  { card, lang, memory, recent, persona, world, recalled }: BuildContext,
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
@@ -312,6 +319,14 @@ ${STRICT_SAFETY_BLOCK}`
 
     // Fill once more over the whole prompt so no card field can leak a raw {{user}}.
     const messages: ChatMessage[] = [{ role: "system", content: f(system) }];
+    if (recalled?.length) {
+      messages.push({
+        role: "system",
+        kind: "context",
+        content: f(`# MEMORY, older entries (facts from earlier in this relationship that fit what ${persona.name} just said; as true as MEMORY, from the time they were said - if one clashes with MEMORY above, MEMORY is current and this is how it was before)
+${bullet(recalled.map((x) => renderFact(x, persona.name, variety >= 12, world?.day)))}`),
+      });
+    }
     if (splitContext) {
       const context = `# RELATIONSHIP STAGE
 ${memory.relationship.stage}${memory.relationship.notes.length ? `\n${bullet(memory.relationship.notes)}` : ""}

@@ -24,7 +24,7 @@ const flag = (name: string) => {
   return i === -1 ? undefined : args[i + 1];
 };
 const expect = (flag("expect") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-const rules = (flag("rules") ?? "v1") as "v1" | "v2" | "v3";
+const rules = (flag("rules") ?? "v1") as "v1" | "v2" | "v3" | "v4";
 const spec = flag("model") ?? "claude-cli:haiku";
 const windowTurns = Number(flag("window") ?? DEFAULT_MEMORY_CONFIG.windowTurns);
 const consolidateEvery = Number(flag("every") ?? DEFAULT_MEMORY_CONFIG.consolidateEvery);
@@ -62,7 +62,7 @@ const firstSaid = (s: string) => rec.turns.find((t) => t.role === "user" && t.co
     });
     console.log(`| ${t.index} | ${memory.facts.length} | ${cells.join(" | ")} |`);
   }
-  console.log(`\n${calls} consolidations · ${promptTokens.toLocaleString()} prompt tokens · ${memory.facts.length} facts at the end`);
+  console.log(`\n${calls} consolidations · ${promptTokens.toLocaleString()} prompt tokens · ${memory.facts.length} facts at the end${memory.archive ? ` · ${memory.archive.length} in the archive` : ""}`);
   for (const s of expect) {
     const said = firstSaid(s);
     const seen = snapshots.filter((x) => said !== undefined && x.memory.coveredUpTo >= said);

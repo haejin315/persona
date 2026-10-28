@@ -1,4 +1,4 @@
-import { ChatSession, findCharacter, observedProvider, startTrace, type LLMProvider, type TokenUsage } from "@persona/engine";
+import { ChatSession, bigramEmbedder, findCharacter, localEmbedder, observedProvider, startTrace, type Embedder, type LLMProvider, type TokenUsage } from "@persona/engine";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BudgetExceededError, BudgetTracker, trackedProvider } from "./budget.js";
@@ -7,6 +7,38 @@ import { resolveProvider } from "./providers.js";
 import { findScenario } from "./scenarios.js";
 import { ScriptedUser, UserSimulator, type UserSource } from "./simulator.js";
 import type { Arm, ConversationRecord, RunConfig, Scenario, UsageTotals } from "./types.js";
+
+/** One embedder per kind for the whole run: the local model loads once, not once per conversation. */
+const embedders = new Map<string, Embedder>();
+function embedderFor(kind: "local" | "bigram" = "local"): Embedder {
+  let e = embedders.get(kind);
+  if (!e) embedders.set(kind, (e = kind === "bigram" ? bigramEmbedder() : localEmbedder()));
+  return e;
+}
+
+/**
+ * A 1000-turn run is five hours of calls; one failed call must not throw it away. Rate-limit errors
+ * wait five minutes and retry for up to three hours (the subscription window resets); anything else
+ * retries twice after 20 s. `undo` puts the session back as it was before the attempt.
+ */
+async function withRetry<T>(fn: () => Promise<T>, undo: () => void, log?: (msg: string) => void): Promise<T> {
+  let limited = 0;
+  let other = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof BudgetExceededError) throw e;
+      const msg = String((e as Error)?.message ?? e);
+      const rateLimited = Boolean((e as { rateLimited?: boolean })?.rateLimited) || /limit|rate|overloaded|429|529/i.test(msg);
+      if (rateLimited ? ++limited > 36 : ++other > 2) throw e;
+      undo();
+      const waitMs = rateLimited ? 5 * 60_000 : 20_000;
+      log?.(`retry in ${waitMs / 1000}s after: ${msg.slice(0, 160)}`);
+      await new Promise((res) => setTimeout(res, waitMs));
+    }
+  }
+}
 
 export interface RunHooks {
   onTurn?: (c: { conversationId: string; userTurn: number; of: number }) => void;
@@ -117,6 +149,7 @@ export async function runConversation(
     persona: scenario.persona,
     memory: { model: mem.model, ...(arm.memory ?? {}) },
     filters: arm.filters,
+    ...(arm.recall ? { recall: { ...arm.recall, embedder: embedderFor(arm.recall.embedder) } } : {}),
   });
 
   let user: UserSource;
@@ -146,17 +179,30 @@ export async function runConversation(
   for (let userTurn = 1; userTurn <= totalTurns; userTurn++) {
     userTurnNow = userTurn;
     try {
-      const msg = await user.next(userTurn, session.turns, name);
-      addUsage(simUsage, msg.usage, msg.model);
-      const reply = await drain(session.sendStream(msg.text)); // streamed, as the chat CLI serves it: first-token time is recorded
-      await session.settle(); // consolidation runs after the reply; the snapshot below wants it finished
+      const turnsBefore = session.turns.length;
+      const reply = await withRetry(
+        async () => {
+          const msg = await user.next(userTurn, session.turns, name);
+          addUsage(simUsage, msg.usage, msg.model);
+          const reply = await drain(session.sendStream(msg.text)); // streamed, as the chat CLI serves it: first-token time is recorded
+          await session.settle(); // consolidation runs after the reply; the snapshot below wants it finished
+          return reply;
+        },
+        () => {
+          // A failed attempt may have pushed the user turn (and a reply) already; drop them.
+          session.turns.length = turnsBefore;
+        },
+        (m) => console.error(`[${id} · user turn ${userTurn}] ${m}`),
+      );
       if (reply.meta?.usage) {
         addUsage(usage as UsageTotals, reply.meta.usage);
         charModel = reply.meta.model ?? charModel;
       }
       if (session.memoryUsage.calls > consolidations) {
         consolidations = session.memoryUsage.calls;
-        memorySnapshots.push({ afterTurnIndex: session.turns.length - 1, memory: structuredClone(session.memory) });
+        // The archive (uncapped, rules v4) is kept once on the record, not in every snapshot.
+        const { archive: _archive, ...memory } = structuredClone(session.memory);
+        memorySnapshots.push({ afterTurnIndex: session.turns.length - 1, memory });
       }
     } catch (e) {
       if (e instanceof BudgetExceededError) {

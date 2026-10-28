@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
     "@langfuse/client": "^6.0.1",
     "@langfuse/otel": "^6.0.1",
     "@langfuse/tracing": "^6.0.1",
