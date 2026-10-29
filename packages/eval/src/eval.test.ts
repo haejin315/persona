@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkFormat, formatScore } from "./format.js";
 import { judgeConversation } from "./judge.js";
@@ -116,6 +119,31 @@ describe("cost controls", () => {
     const users = (r: typeof rec) => r.turns.filter((t) => t.role === "user").map((t) => t.content);
     expect(users(rec)).toEqual(users(original)); // capped at the recording's 6 turns
     expect(rec.simUsage?.calls).toBe(0);
+  });
+
+  it("saves a partial record every N user turns and picks a conversation up from it (docs/12)", async () => {
+    const { partialFileName } = await import("./runner.js");
+    const scenario = findScenario("haru-ko");
+    const arm = { id: "v2-fake", promptVersion: "v2-structured", model: "fake" };
+    const dir = mkdtempSync(join(tmpdir(), "persona-ckpt-"));
+    const partial = join(dir, partialFileName(`${scenario.id}__${arm.id}__r0`));
+    const seen: boolean[] = [];
+    const rec = await runConversation(scenario, arm, { userTurns: 6, simulatorModel: "fake" }, 0, { onTurn: () => seen.push(existsSync(partial)) }, { checkpointDir: dir, checkpointEvery: 2 });
+    expect(seen).toEqual([false, true, true, true, true, true]); // written after turns 2 and 4, not after the last
+    expect(existsSync(partial)).toBe(false); // removed once the conversation is complete
+
+    // A crash after turn 4: the partial holds the first four exchanges; the next run continues from turn 5.
+    const fifthUser = rec.turns.filter((t) => t.role === "user")[4]!.index;
+    const saved = { userTurn: 4, turns: rec.turns.slice(0, fifthUser), memory: rec.memory, memorySnapshots: [], usage: { ...rec.usage, calls: 4 }, simUsage: { ...rec.simUsage, calls: 4 }, memoryUsage: rec.memoryUsage, charModel: "fake", startedAt: "2026-10-29T00:00:00.000Z" };
+    writeFileSync(partial, JSON.stringify(saved));
+    const resumed: { conversationId: string; userTurn: number }[] = [];
+    const rec2 = await runConversation(scenario, arm, { userTurns: 6, simulatorModel: "fake" }, 0, { onResume: (c) => resumed.push(c) }, { checkpointDir: dir, checkpointEvery: 2 });
+    expect(resumed).toEqual([{ conversationId: rec.id, userTurn: 4 }]);
+    expect(rec2.turns.slice(0, fifthUser)).toEqual(rec.turns.slice(0, fifthUser)); // the saved exchanges are kept verbatim
+    expect(rec2.turns.filter((t) => t.role === "user").length).toBe(6);
+    expect(rec2.usage.calls).toBe(6); // 4 restored + 2 new
+    expect(rec2.startedAt).toBe("2026-10-29T00:00:00.000Z");
+    expect(existsSync(partial)).toBe(false);
   });
 
   it("estimates a run and prices claude-cli judging as unbilled", async () => {

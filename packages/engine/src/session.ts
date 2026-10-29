@@ -186,7 +186,10 @@ export class ChatSession {
     this.memory = normalizeMemory(structuredClone(snap.memory));
     this.persona = { ...snap.persona };
     this.recalled = [];
+    // A restored archive has to be embedded before the first recall query (awaited there).
+    if (this.recall && this.memory.archive?.length) this.indexing = this.recall.index(this.memory.archive).catch(() => {});
   }
+  private indexing?: Promise<void>;
 
   private async generate(opts: GenerateOptions): Promise<Turn> {
     await this.settle();
@@ -356,6 +359,7 @@ export class ChatSession {
   /** Pick the archive entries that fit the user's latest message (docs/12). One embedding of the query; the rest is a dot product. */
   private async refreshRecall(): Promise<void> {
     if (!this.recall) return;
+    await this.indexing;
     const last = [...this.turns].reverse().find((t) => t.role === "user");
     const archive = this.memory.archive ?? [];
     this.recalled = last && archive.length ? await this.recall.query(last.content, archive, this.memory.facts) : [];

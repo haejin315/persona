@@ -1,5 +1,5 @@
 import { ChatSession, bigramEmbedder, findCharacter, localEmbedder, observedProvider, startTrace, type Embedder, type LLMProvider, type TokenUsage } from "@persona/engine";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BudgetExceededError, BudgetTracker, trackedProvider } from "./budget.js";
 import { withRetry } from "./retry.js";
@@ -19,6 +19,8 @@ function embedderFor(kind: "local" | "bigram" = "local"): Embedder {
 
 export interface RunHooks {
   onTurn?: (c: { conversationId: string; userTurn: number; of: number }) => void;
+  /** A conversation picked up from its partial record at this user turn. */
+  onResume?: (c: { conversationId: string; userTurn: number }) => void;
   onConversation?: (rec: ConversationRecord) => void;
   onSkip?: (ids: string[]) => void;
 }
@@ -28,7 +30,29 @@ export interface RunContext {
   replay?: ReplayIndex;
   /** Reuse finished recordings already in outDir (default true). */
   resume?: boolean;
+  /**
+   * Directory for partial records. A conversation is saved there every `checkpointEvery` user turns
+   * (default 20) and, when a run restarts, picked up from the last save instead of from turn 1. A
+   * 1000-turn conversation is 7.5 hours of calls and used to be written only at its end: the CLI's
+   * OAuth session expired at turn 300 of two arms (2026-10-29) and all of it was lost.
+   */
+  checkpointDir?: string;
+  checkpointEvery?: number;
 }
+
+/** What a partial record holds: everything the loop below accumulates, plus the user turn reached. */
+interface PartialRecord {
+  userTurn: number;
+  turns: ConversationRecord["turns"];
+  memory: ConversationRecord["memory"];
+  memorySnapshots: NonNullable<ConversationRecord["memorySnapshots"]>;
+  usage: ConversationRecord["usage"];
+  simUsage: UsageTotals;
+  memoryUsage: UsageTotals;
+  charModel: string;
+  startedAt: string;
+}
+export const partialFileName = (id: string) => recordFileName(id).replace(/\.json$/, ".partial.json");
 
 /** Recorded conversations to replay the user side from. */
 export class ReplayIndex {
@@ -142,7 +166,7 @@ export async function runConversation(
   }
 
   const name = card.name[scenario.lang] ?? card.id;
-  const startedAt = new Date().toISOString();
+  let startedAt = new Date().toISOString();
   const totalTurns = user.length !== undefined ? Math.min(cfg.userTurns, user.length) : cfg.userTurns;
 
   session.open();
@@ -150,10 +174,32 @@ export async function runConversation(
   const simUsage = emptyTotals();
   let truncated = false;
   let charModel = chat.model ?? chat.provider.defaultModel;
-  const memorySnapshots: ConversationRecord["memorySnapshots"] = [];
+  const memorySnapshots: NonNullable<ConversationRecord["memorySnapshots"]> = [];
   let consolidations = 0;
 
-  for (let userTurn = 1; userTurn <= totalTurns; userTurn++) {
+  const partialFile = ctx.checkpointDir ? join(ctx.checkpointDir, partialFileName(id)) : undefined;
+  const checkpointEvery = ctx.checkpointEvery ?? 20;
+  let firstTurn = 1;
+  if (partialFile && ctx.resume !== false && existsSync(partialFile)) {
+    const p = JSON.parse(readFileSync(partialFile, "utf8")) as PartialRecord;
+    session.restore({ turns: p.turns, memory: p.memory, persona: scenario.persona });
+    Object.assign(usage, p.usage);
+    Object.assign(simUsage, p.simUsage);
+    Object.assign(session.memoryUsage, p.memoryUsage);
+    memorySnapshots.push(...p.memorySnapshots);
+    consolidations = session.memoryUsage.calls;
+    charModel = p.charModel;
+    startedAt = p.startedAt;
+    firstTurn = p.userTurn + 1;
+    hooks.onResume?.({ conversationId: id, userTurn: p.userTurn });
+  }
+  const checkpoint = (userTurn: number) => {
+    if (!partialFile) return;
+    const p: PartialRecord = { userTurn, turns: session.turns, memory: session.memory, memorySnapshots, usage, simUsage, memoryUsage: { ...session.memoryUsage }, charModel, startedAt };
+    writeFileSync(partialFile, JSON.stringify(p));
+  };
+
+  for (let userTurn = firstTurn; userTurn <= totalTurns; userTurn++) {
     userTurnNow = userTurn;
     try {
       const turnsBefore = session.turns.length;
@@ -188,8 +234,10 @@ export async function runConversation(
       }
       throw e;
     }
+    if (userTurn % checkpointEvery === 0 && userTurn < totalTurns) checkpoint(userTurn);
     hooks.onTurn?.({ conversationId: id, userTurn, of: totalTurns });
   }
+  if (partialFile) rmSync(partialFile, { force: true });
 
   const memoryUsage: UsageTotals = { ...session.memoryUsage };
   const costUsd =
@@ -269,7 +317,7 @@ export async function runMatrix(cfg: RunConfig, concurrency = 4, hooks: RunHooks
           const replay =
             ctx.replay ??
             (cfg.replayFrom ? ReplayIndex.load(phase === 1 ? cfg.outDir : cfg.replayFrom, cfg.replayArmId) : undefined);
-          const rec = await runConversation(scenario, arm, cfg, r, hooks, { budget, replay });
+          const rec = await runConversation(scenario, arm, cfg, r, hooks, { budget, replay, checkpointDir: dir, resume: ctx.resume, ...(ctx.checkpointEvery ? { checkpointEvery: ctx.checkpointEvery } : {}) });
           writeFileSync(join(dir, recordFileName(rec.id)), JSON.stringify(rec, null, 2));
           return rec;
         });

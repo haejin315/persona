@@ -14,7 +14,9 @@ export async function withRetry<T>(fn: () => Promise<T>, undo: () => void, log?:
     } catch (e) {
       if (e instanceof BudgetExceededError) throw e;
       const msg = String((e as Error)?.message ?? e);
-      const rateLimited = Boolean((e as { rateLimited?: boolean })?.rateLimited) || /limit|rate|overloaded|429|529/i.test(msg);
+      // An expired OAuth session that the CLI could not refresh (seen 2026-10-29 at turn 300 of two
+      // 1000-turn arms) is transient too: it came back by itself, so it waits like a rate limit.
+      const rateLimited = Boolean((e as { rateLimited?: boolean })?.rateLimited) || /limit|rate|overloaded|429|529|authenticat|oauth/i.test(msg);
       if (rateLimited ? ++limited > 36 : ++other > 2) throw e;
       undo();
       const waitMs = rateLimited ? 5 * 60_000 : 20_000;

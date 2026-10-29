@@ -92,6 +92,7 @@ async function cmdRun(cfgPath: string) {
           `${rec.truncated ? "✗ TRUNCATED" : "✓"} ${rec.id}  prompt ${rec.usage.promptTokens} (cached ${rec.usage.cachedPromptTokens}) / out ${rec.usage.completionTokens} tokens · ${fmtUsd(rec.costUsd ?? 0)}`,
         ),
       onSkip: (ids) => console.log(`  resuming: ${ids.length} finished conversation(s) already on disk (use --fresh to redo)`),
+      onResume: ({ conversationId, userTurn }) => console.log(`  ${conversationId}: picked up from its partial record at user turn ${userTurn}`),
     },
     { budget, resume: !process.argv.includes("--fresh") },
   );
