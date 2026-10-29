@@ -122,7 +122,7 @@ export interface Turn {
      */
     boundary?: string;
     /** Archive entries shown next to MEMORY for this reply, with their match score (docs/12). */
-    recalled?: { text: string; score: number; why: "entity" | "vector" }[];
+    recalled?: { text: string; score: number; why: "entity" | "vector"; turnTo?: number }[];
   };
 }
 

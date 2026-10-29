@@ -104,7 +104,9 @@ export class ChatSession {
       ...opts.memory,
     });
     if (opts.recall) {
-      this.recall = new Recall(opts.recall.embedder, opts.recall);
+      // The two speakers' names are not what a message is about (docs/12 result 2).
+      const name = this.card.name[this.lang] ?? this.card.name.ko ?? this.card.id;
+      this.recall = new Recall(opts.recall.embedder, { ...opts.recall, ignoreEntities: [...(opts.recall.ignoreEntities ?? []), name, this.persona.name] });
       void this.recall.warm().catch(() => {});
     }
   }
@@ -132,7 +134,7 @@ export class ChatSession {
       recent: this.memoryManager.recentWindow(this.turns),
       persona: this.persona,
       ...(this.world ? { world: this.world } : {}),
-      ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact) } : {}),
+      ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact), now: this.turns.length } : {}),
     });
   }
 
@@ -367,7 +369,7 @@ export class ChatSession {
 
   private recalledMeta(): Pick<NonNullable<Turn["meta"]>, "recalled"> {
     return this.recalled.length
-      ? { recalled: this.recalled.map((h) => ({ text: h.fact.text, score: Math.round(h.score * 1000) / 1000, why: h.why })) }
+      ? { recalled: this.recalled.map((h) => ({ text: h.fact.text, score: Math.round(h.score * 1000) / 1000, why: h.why, turnTo: h.fact.turnTo })) }
       : {};
   }
 

@@ -80,6 +80,7 @@ npm run eval -- all packages/eval/experiments/haru-ja.json                 # 5  
 npm run eval -- all packages/eval/experiments/model-r1.json                # 6  sonnet vs haiku (리플레이)
 npm run eval -- all packages/eval/experiments/long-run-1000.json           # 11 1000턴, 상한 25개가 깨지는 지점 (기준선, ~6시간)
 npm run eval -- all packages/eval/experiments/long-run-1000-recall.json    # 11 archive 꺼내기 e5 / 바이그램 (11의 유저 턴 리플레이)
+npm run eval -- all packages/eval/experiments/long-run-1000-recall2.json   # 11 꺼내기 2차: 이름 제외 · 근사 중복 접기 · 시점 표기 · 상대 임계값(minZ) 유무
 
 npm run eval -- regen  eval-results/prompt-version                         # 재생성 사유 분류만 다시 (--rules-only: 규칙만 재계산)
 npm run eval -- safety eval-results/safety                                 # 안전 감사만 다시
@@ -129,6 +130,6 @@ npm run eval -- judge  eval-results/model --format-only                    # 규
 6. 웹 데모 (TS 서버 + React): 현재 프롬프트, 기억 상태, 재생성 사유 판정을 보여주는 디버그 패널
 7. 반복 실험: v4 프롬프트 전후, 200턴 장기 실행, 기억 사실 상한의 교체 정책, 카엘 일본어, Ollama 로컬 모델 arm
 9. 살아 있는 세계(docs/10): 출처 붙은 사실 → 세계 시계·장소·일정 → 사건 장부 → 캐릭터 간 장면 → 따라잡기 → 긴 공백의 장(章) 파이프라인
-11. 잊지 않는 저장소(docs/12): 사실 25개는 1000턴을 못 버틴다. 추출한 모든 사실을 상한 없는 archive에 쌓고, 유저의 이번 말로 검색해(고유명사 색인 ∪ 로컬 임베딩) 답장마다 5개를 장부 옆에 보인다. 1000턴 시나리오(사실 70여 개, 프로브 30개)로 깨지는 지점을 먼저 재고, 꺼내기 arm을 같은 유저 턴으로 재생해 회상과 지어냄을 나란히 본다
+11. 잊지 않는 저장소(docs/12): 추출한 모든 사실을 상한 없는 archive에 쌓고, 유저의 이번 말로 검색해(고유명사 색인 ∪ 로컬 임베딩) 장부 옆에 보인다. 1000턴 기준선에서 상한 25는 사실을 버리는 대신 칸을 문단으로 키워 버텼고(프롬프트 토큰 +75%), 떨어뜨린 사실은 하나였다. 꺼내기 arm 둘은 그 하나를 되찾았지만 기억 4.56 → 4.27·4.25, 프로브 28 → 25·24, 첫 글자 +2.8초(답장마다 5개를 읽느라 사고 토큰 +170). 원인은 잡음이다. 유저 말의 "하루 씨"·"보리"가 두 화자 이름이 태그된 항목 수백 개를 끌어왔고, 시점 없는 옛 사실("이사가 다다음 주 토요일")이 지금으로 읽혔다. 기본값 아님. 2차는 이름 제외·근사 중복 접기·시점 표기·상대 임계값(평균+2.5σ)으로 다시 잰다
 10. 응답 시간(docs/11): 답장 한 번(11~14초)을 CLI 기동 3초·숨은 사고 5초·본문 2초로 쪼갰다. 사고를 끈 모델은 첫 글자 3초지만 지어냄 0/28 → 6/28이라 탈락. 기동은 타자 치는 동안 미리, 기억 정리는 답장 뒤, 지문은 먼저, 본문은 스트리밍. 바닥은 첫 글자 9~10초이고 그 아래는 모델의 사고다
 8. docker-compose, GitHub Actions(typecheck · vitest · 오프라인 스모크), 배포

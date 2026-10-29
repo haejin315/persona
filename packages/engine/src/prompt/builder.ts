@@ -3,6 +3,7 @@ import {
   fillUser,
   renderFact,
   turnText,
+  type ArchivedFact,
   type CharacterCard,
   type ChatMessage,
   type Fact,
@@ -27,7 +28,9 @@ export interface BuildContext {
    * same standing as MEMORY, so the static system prompt (and its cache, and the prewarmed process)
    * stay untouched. Absent = prompt unchanged.
    */
-  recalled?: Fact[];
+  recalled?: ArchivedFact[];
+  /** Transcript turn count now, so each recalled entry can say how long ago it was said. */
+  now?: number;
 }
 
 export interface PromptVersion {
@@ -222,7 +225,7 @@ A paragraph in MEMORY that starts with [days a-b] is a condensed record of those
 `;
 
 function buildV2(
-  { card, lang, memory, recent, persona, world, recalled }: BuildContext,
+  { card, lang, memory, recent, persona, world, recalled, now }: BuildContext,
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
@@ -320,11 +323,14 @@ ${STRICT_SAFETY_BLOCK}`
     // Fill once more over the whole prompt so no card field can leak a raw {{user}}.
     const messages: ChatMessage[] = [{ role: "system", content: f(system) }];
     if (recalled?.length) {
+      // An archive entry speaks from its own moment ("내일부터", "다다음 주 토요일"); shown bare, the
+      // character took 1000-turn-old plans as current (docs/12 result 2). Each line says how old it is.
+      const age = (x: ArchivedFact) => (now === undefined ? "" : `[about ${Math.max(1, Math.round((now - x.turnTo) / 2))} exchanges ago] `);
       messages.push({
         role: "system",
         kind: "context",
-        content: f(`# MEMORY, older entries (facts from earlier in this relationship that fit what ${persona.name} just said; as true as MEMORY, from the time they were said - if one clashes with MEMORY above, MEMORY is current and this is how it was before)
-${bullet(recalled.map((x) => renderFact(x, persona.name, variety >= 12, world?.day)))}`),
+        content: f(`# MEMORY, older entries (facts from earlier in this relationship that fit what ${persona.name} just said; as true as MEMORY, but from the time they were said - each is marked with how long ago that was, and "tomorrow" or "next week" inside one counts from then, not from now; if one clashes with MEMORY above, MEMORY is current and this is how it was before)
+${bullet(recalled.map((x) => age(x) + renderFact(x, persona.name, variety >= 12, world?.day)))}`),
       });
     }
     if (splitContext) {

@@ -80,6 +80,39 @@ export interface RecallOptions {
   k?: number;
   /** Vector hits below this cosine are not shown (entity hits always are). */
   minScore?: number;
+  /**
+   * Vector hits are shown only when they stand this many standard deviations above the mean
+   * similarity of the whole archive to the query. Cosines from e5 sit in a 0.03-wide band (mean
+   * 0.83-0.84, sd 0.02 on the 1000-turn archive), so an absolute `minScore` does not separate a
+   * fact that fits from the rest; a fact that fits stood at z 3.2-4.0, the best of nothing at 2.2-2.7
+   * (docs/12 result 2). Absent = every vector hit may be shown.
+   */
+  minZ?: number;
+  /**
+   * Entities never used for exact matching. The two speakers' names say nothing about what a message
+   * is about: "고마워요, 하루 씨" pulled five restatements of "하루 told him to close the door" (docs/12
+   * result 2). The session adds the character's and the user's names.
+   */
+  ignoreEntities?: string[];
+}
+
+/**
+ * Two archive texts that are the same fact a word apart: the summariser restates what it extracted
+ * across consecutive consolidations ("하루는 문은 바로 닫아 달라고 했다" three ways), and exact-text
+ * merging left them to fill the k slots with one fact (docs/12 result 2). Jaccard on character bigrams.
+ */
+export function nearDuplicate(a: string, b: string, threshold = 0.5): boolean {
+  const grams = (s: string) => {
+    const t = s.replace(/\s+/g, "");
+    const g = new Set<string>();
+    for (let i = 0; i + 1 < t.length; i++) g.add(t.slice(i, i + 2));
+    return g;
+  };
+  const A = grams(a), B = grams(b);
+  if (!A.size || !B.size) return a === b;
+  let both = 0;
+  for (const g of A) if (B.has(g)) both++;
+  return both / (A.size + B.size - both) >= threshold;
 }
 
 const dot = (a: number[], b: number[]) => {
@@ -92,6 +125,8 @@ export class Recall {
   private vectors = new Map<string, number[]>();
   readonly k: number;
   readonly minScore?: number;
+  readonly minZ?: number;
+  readonly ignoreEntities: string[];
 
   constructor(
     readonly embedder: Embedder,
@@ -99,6 +134,8 @@ export class Recall {
   ) {
     this.k = opts.k ?? 5;
     this.minScore = opts.minScore;
+    this.minZ = opts.minZ;
+    this.ignoreEntities = opts.ignoreEntities ?? [];
   }
 
   async warm(): Promise<void> {
@@ -128,16 +165,33 @@ export class Recall {
       const prev = latest.get(f.text);
       if (!prev || f.turnTo > prev.turnTo) latest.set(f.text, f);
     }
-    const hits: RecallHit[] = [];
+    const cands: { f: ArchivedFact; cos: number; entity: boolean }[] = [];
     for (const f of latest.values()) {
       if (inLedger(f.text)) continue;
       const v = this.vectors.get(f.text);
       const cos = v ? dot(q!, v) : 0;
-      const entity = (f.entities ?? []).find((e) => e.length >= 2 && query.includes(e));
-      if (entity) hits.push({ fact: f, score: 1 + cos, why: "entity" });
-      else if (this.minScore === undefined || cos >= this.minScore) hits.push({ fact: f, score: cos, why: "vector" });
+      const entity = (f.entities ?? []).some((e) => e.length >= 2 && !this.ignoreEntities.includes(e) && query.includes(e));
+      cands.push({ f, cos, entity });
+    }
+    // The floor a vector hit must clear: the absolute one, or the archive's own distribution for this query.
+    let floor = this.minScore ?? -Infinity;
+    if (this.minZ !== undefined && cands.length > 1) {
+      const mean = cands.reduce((a, c) => a + c.cos, 0) / cands.length;
+      const sd = Math.sqrt(cands.reduce((a, c) => a + (c.cos - mean) ** 2, 0) / cands.length);
+      floor = Math.max(floor, mean + this.minZ * sd);
+    }
+    const hits: RecallHit[] = [];
+    for (const c of cands) {
+      if (c.entity) hits.push({ fact: c.f, score: 1 + c.cos, why: "entity" });
+      else if (c.cos >= floor) hits.push({ fact: c.f, score: c.cos, why: "vector" });
     }
     hits.sort((a, b) => b.score - a.score || b.fact.turnTo - a.fact.turnTo);
-    return hits.slice(0, this.k);
+    const picked: RecallHit[] = [];
+    for (const h of hits) {
+      if (picked.length >= this.k) break;
+      if (picked.some((p) => nearDuplicate(p.fact.text, h.fact.text))) continue;
+      picked.push(h);
+    }
+    return picked;
   }
 }

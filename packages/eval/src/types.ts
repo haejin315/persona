@@ -74,7 +74,7 @@ export interface Arm {
    * "local" = multilingual-e5-small through transformers.js on the CPU (default), "bigram" = hashed
    * character n-grams, no model (offline baseline and tests).
    */
-  recall?: { k?: number; minScore?: number; embedder?: "local" | "bigram" };
+  recall?: { k?: number; minScore?: number; minZ?: number; embedder?: "local" | "bigram" };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };
 }

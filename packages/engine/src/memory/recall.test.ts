@@ -4,7 +4,7 @@ import type { LLMProvider } from "../providers/types.js";
 import { ChatSession } from "../session.js";
 import { emptyMemory, type ArchivedFact } from "../types.js";
 import { MemoryManager } from "./manager.js";
-import { Recall, bigramEmbedder } from "./recall.js";
+import { Recall, bigramEmbedder, nearDuplicate } from "./recall.js";
 
 const cards = loadAllCharacters();
 
@@ -32,6 +32,30 @@ describe("recall (docs/12)", () => {
     expect(hits[0]!.why).toBe("entity");
     expect(hits[0]!.fact.text).toContain("보리");
     expect(hits.some((h) => h.fact.text.includes("11월 3일"))).toBe(false);
+  });
+
+  it("the speakers' names are not entities, near-duplicates collapse, and minZ hides what merely resembles the message (docs/12 result 2)", async () => {
+    const dup: ArchivedFact[] = [
+      ...archive,
+      { text: "민수는 고양이 한 마리를 키우고 그 이름은 보리다", source: "user", turnFrom: 30, turnTo: 40, entities: ["민수", "보리"] },
+    ];
+    // "하루 씨" names the character: without the exclusion every 하루-tagged entry is an entity hit.
+    const plain = new Recall(bigramEmbedder(), { k: 5 });
+    expect((await plain.query("고마워요, 하루 씨.", dup)).filter((h) => h.why === "entity").length).toBe(1);
+    const r = new Recall(bigramEmbedder(), { k: 5, ignoreEntities: ["하루", "민수"] });
+    expect((await r.query("고마워요, 하루 씨.", dup)).filter((h) => h.why === "entity").length).toBe(0);
+    // 보리 is still an entity, and the two restatements of the cat fact count once.
+    expect(nearDuplicate(dup[0]!.text, dup[4]!.text)).toBe(true);
+    expect(nearDuplicate(dup[0]!.text, dup[1]!.text)).toBe(false);
+    const hits = await r.query("보리는 잘 지내요?", dup);
+    expect(hits.filter((h) => h.fact.text.includes("고양이")).length).toBe(1);
+    expect(hits[0]!.why).toBe("entity");
+    // With minZ a message that resembles nothing shows fewer than the k that fit without it.
+    const gated = new Recall(bigramEmbedder(), { k: 5, ignoreEntities: ["하루", "민수"], minZ: 1.5 });
+    expect((await r.query("오늘 날씨가 참 좋네요.", dup)).length).toBe(4); // five entries, the two cat restatements count once
+    expect((await gated.query("오늘 날씨가 참 좋네요.", dup)).length).toBeLessThanOrEqual(2);
+    // An entity hit is shown whatever the floor.
+    expect((await gated.query("성수동 이사는 잘 되셨어요?", dup)).some((h) => h.fact.text.includes("성수동") && h.why === "entity")).toBe(true);
   });
 
   it("memory rules v4 keep every new fact in the archive with its turn range and entities, and hide the archive from the summariser", async () => {
@@ -93,8 +117,9 @@ describe("recall (docs/12)", () => {
     const ctx = prompt.find((p) => p.startsWith("system/context"));
     expect(ctx).toContain("older entries");
     expect(ctx).toContain("보리");
+    expect(ctx).toMatch(/\[about \d+ exchanges ago\] /); // each entry says how old it is
     expect(prompt[0]).not.toContain("older entries"); // the static system prompt is untouched
-    expect(turn.meta?.recalled?.[0]).toMatchObject({ why: "entity" });
+    expect(turn.meta?.recalled?.[0]).toMatchObject({ why: "entity", turnTo: 20 });
     expect(turn.meta?.recalled?.[0]?.text).toContain("보리");
   });
 });
