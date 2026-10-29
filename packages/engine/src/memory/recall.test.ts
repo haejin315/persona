@@ -38,10 +38,12 @@ describe("recall (docs/12)", () => {
     const dup: ArchivedFact[] = [
       ...archive,
       { text: "민수는 고양이 한 마리를 키우고 그 이름은 보리다", source: "user", turnFrom: 30, turnTo: 40, entities: ["민수", "보리"] },
+      // The summariser also tags the addressed form; it must fall under the same exclusion (result 3).
+      { text: "민수는 하루 씨라고 부르기로 했다", source: "user", turnFrom: 40, turnTo: 50, entities: ["민수", "하루 씨"] },
     ];
     // "하루 씨" names the character: without the exclusion every 하루-tagged entry is an entity hit.
     const plain = new Recall(bigramEmbedder(), { k: 5 });
-    expect((await plain.query("고마워요, 하루 씨.", dup)).filter((h) => h.why === "entity").length).toBe(1);
+    expect((await plain.query("고마워요, 하루 씨.", dup)).filter((h) => h.why === "entity").length).toBe(2);
     const r = new Recall(bigramEmbedder(), { k: 5, ignoreEntities: ["하루", "민수"] });
     expect((await r.query("고마워요, 하루 씨.", dup)).filter((h) => h.why === "entity").length).toBe(0);
     // 보리 is still an entity, and the two restatements of the cat fact count once.
@@ -52,7 +54,7 @@ describe("recall (docs/12)", () => {
     expect(hits[0]!.why).toBe("entity");
     // With minZ a message that resembles nothing shows fewer than the k that fit without it.
     const gated = new Recall(bigramEmbedder(), { k: 5, ignoreEntities: ["하루", "민수"], minZ: 1.5 });
-    expect((await r.query("오늘 날씨가 참 좋네요.", dup)).length).toBe(4); // five entries, the two cat restatements count once
+    expect((await r.query("오늘 날씨가 참 좋네요.", dup)).length).toBe(5); // six entries, the two cat restatements count once
     expect((await gated.query("오늘 날씨가 참 좋네요.", dup)).length).toBeLessThanOrEqual(2);
     // An entity hit is shown whatever the floor.
     expect((await gated.query("성수동 이사는 잘 되셨어요?", dup)).some((h) => h.fact.text.includes("성수동") && h.why === "entity")).toBe(true);

@@ -142,6 +142,17 @@ export class Recall {
     await this.embedder.warm?.();
   }
 
+  /**
+   * The summariser tags a speaker both bare and as addressed ("하루" and "하루 씨"); the second form
+   * slipped past the exclusion and drove 150-170 entity hits per 1000 replies (docs/12 result 3).
+   * An address suffix on an ignored name is still that name.
+   */
+  private ignored(e: string): boolean {
+    if (this.ignoreEntities.includes(e)) return true;
+    const bare = e.replace(/\s*(씨|님|선배|군|양)$/u, "");
+    return bare !== e && this.ignoreEntities.includes(bare);
+  }
+
   /** Embed archive entries not seen yet. Runs after a consolidation, off the user's path. */
   async index(archive: ArchivedFact[]): Promise<void> {
     const missing = [...new Set(archive.map((f) => f.text))].filter((t) => !this.vectors.has(t));
@@ -170,7 +181,7 @@ export class Recall {
       if (inLedger(f.text)) continue;
       const v = this.vectors.get(f.text);
       const cos = v ? dot(q!, v) : 0;
-      const entity = (f.entities ?? []).some((e) => e.length >= 2 && !this.ignoreEntities.includes(e) && query.includes(e));
+      const entity = (f.entities ?? []).some((e) => e.length >= 2 && !this.ignored(e) && query.includes(e));
       cands.push({ f, cos, entity });
     }
     // The floor a vector hit must clear: the absolute one, or the archive's own distribution for this query.
