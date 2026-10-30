@@ -111,7 +111,9 @@ describe("Graph RAG memory (docs/14)", () => {
       triple: { subject: "민수", relation: "들른다", object: `서점 ${i}` },
     }));
     const home: ArchivedFact = { text: "민수는 이사 전 대전 본가에 들른다", source: "user", turnFrom: 10, turnTo: 10, triple: { subject: "민수", relation: "들른다", object: "대전 본가" } };
-    const all = [home, ...seats, ...visits];
+    // The same triple restated later: one line in the result, not two.
+    const again: ArchivedFact = { text: "민수는 대전 본가에 들른다고 다시 말했다", source: "user", turnFrom: 300, turnTo: 300, triple: { subject: "민수", relation: "들른다", object: "대전 본가" } };
+    const all = [home, again, ...seats, ...visits];
     const rag = new GraphRag({ ns: "r", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, edgeCandidates: 60, factK: 2, selfK: 0 });
     await rag.ingestFacts(all);
     // "본가" is a token of the node "대전 본가": the node seeds; 민수 (hub, on all 21 edges) does not.
@@ -124,6 +126,7 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(r.edges[0]!.object).toBe("대전 본가");
     expect(r.edges[0]!.score).toBeGreaterThan(r.edges[1]!.score ?? 0);
     expect(r.edges.every((e) => e.relation === "들른다")).toBe(true);
+    expect(r.edges.filter((e) => e.object === "대전 본가")).toHaveLength(1);
     expect(factId(home)).toBe("f10-10:민수는 이사 전 대전 본가에 들른다");
     // Without ranking (edgeCandidates 0) the graph's own order wins: depth 1 first, then newest.
     const plain = new GraphRag({ ns: "p", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, edgeCandidates: 0, tokenLinking: false });

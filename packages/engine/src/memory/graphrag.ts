@@ -180,6 +180,16 @@ export class GraphRag {
         .map((e) => ({ ...e, score: score.get(factId(e)) }))
         .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.depth - b.depth || b.turnTo - a.turnTo);
     }
+    // One line per triple: the summariser restates a fact every time it comes up (민수 —그렸다→
+    // 달빛 고양이 twice, 만화 원서 twice), and each restatement took one of the edgeLimit slots
+    // (round 3, t996). The best-ranked instance stays.
+    const seen = new Set<string>();
+    edges = edges.filter((e) => {
+      const k = `${e.subject}\u0000${e.relation}\u0000${e.object}\u0000${e.current}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
     edges = edges.slice(0, edgeLimit);
     const min = this.opts.minScore ?? 0;
     const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
