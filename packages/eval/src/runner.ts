@@ -152,6 +152,7 @@ export async function runConversation(
     filters: arm.filters,
     ...(arm.recall ? { recall: { ...arm.recall, embedder: embedderFor(arm.recall.embedder) } } : {}),
     ...(arm.pageRecall ? { pageRecall: arm.pageRecall } : {}),
+    ...(arm.graphRag ? { graphRag: { ...arm.graphRag, ns: id.toLowerCase().replace(/[^a-z0-9]+/g, "-") } } : {}),
   });
 
   let user: UserSource;

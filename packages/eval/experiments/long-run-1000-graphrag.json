@@ -1,0 +1,28 @@
+{
+  "scenarioIds": [
+    "haru-ko-1000"
+  ],
+  "arms": [
+    {
+      "id": "v13-ledger10-vector/sonnet",
+      "promptVersion": "v13-structured",
+      "model": "claude-cli:sonnet",
+      "memory": { "rules": "v5", "maxFacts": 10, "maxFactChars": 1000 },
+      "graphRag": { "chunkK": 3, "factK": 5, "hops": 2, "edgeLimit": 0 }
+    },
+    {
+      "id": "v13-ledger10-graphrag/sonnet",
+      "promptVersion": "v13-structured",
+      "model": "claude-cli:sonnet",
+      "memory": { "rules": "v5", "maxFacts": 10, "maxFactChars": 1000 },
+      "graphRag": { "chunkK": 3, "factK": 5, "hops": 2, "edgeLimit": 12 }
+    }
+  ],
+  "userTurns": 1000,
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "replayFrom": "eval-results/long-run-1000",
+  "replayArmId": "v13-ledger25/sonnet",
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/long-run-1000-graphrag"
+}

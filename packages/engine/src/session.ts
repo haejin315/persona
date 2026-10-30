@@ -2,6 +2,10 @@ import { firstSpeechComplete, firstSpeechLine, stripRepeatedOpener } from "./fil
 import { DEFAULT_MEMORY_CONFIG, MemoryManager, type MemoryConfig } from "./memory/manager.js";
 import { Recall, type Embedder, type RecallHit, type RecallOptions } from "./memory/recall.js";
 import { MemoryStore, type StoredFact } from "./memory/store.js";
+import { GraphRag, renderGraphRag, type GraphRagOptions } from "./memory/graphrag.js";
+import { QdrantIndex } from "./memory/vectordb.js";
+import { Neo4jGraph } from "./memory/graphdb.js";
+import { localEmbedder } from "./memory/recall.js";
 import { getPromptVersion, type PromptVersion } from "./prompt/builder.js";
 import type { GenerateOptions, LLMProvider } from "./providers/types.js";
 import {
@@ -40,6 +44,13 @@ export interface SessionOptions {
    * Needs memory rules v4. Without `store` the session keeps one in memory (rebuilt on restore).
    */
   pageRecall?: { maxLines?: number; maxShare?: number; minFacts?: number; store?: MemoryStore };
+  /**
+   * Graph RAG memory (docs/14; needs memory rules v5): transcript chunks and facts go to a vector
+   * database (Qdrant by default), fact triples to a knowledge graph (Neo4j by default); before
+   * each reply the user's message seeds the graph and queries the vectors, and the result is one
+   * context block. `ns` is the conversation's namespace in both stores.
+   */
+  graphRag?: Partial<Omit<GraphRagOptions, "ns">> & { ns: string };
   model?: string;
   temperature?: number;
   /** Passed to the provider on every reply; "off" answers without extended thinking where the model allows (docs/11). */
@@ -92,6 +103,12 @@ export class ChatSession {
   page?: { entity: string; facts: StoredFact[] };
   private store?: MemoryStore;
   private ownStore = false;
+  private graphRag?: GraphRag;
+  /** The rendered Graph RAG block for the reply being generated (docs/14). */
+  knowledge?: string;
+  private retrievalMeta?: NonNullable<Turn["meta"]>["retrieval"] & { lines: NonNullable<NonNullable<Turn["meta"]>["recalled"]> };
+  private ingestedUpTo = -1;
+  private rebuilding?: Promise<void>;
   private pageOpts?: { maxLines?: number; maxShare?: number; minFacts?: number };
   private model?: string;
   private temperature?: number;
@@ -128,6 +145,16 @@ export class ChatSession {
       this.store = store ?? new MemoryStore();
       this.ownStore = !store;
     }
+    if (opts.graphRag) {
+      const g = opts.graphRag;
+      this.graphRag = new GraphRag({
+        ...g,
+        embedder: g.embedder ?? localEmbedder(),
+        vectors: g.vectors ?? new QdrantIndex(),
+        graph: g.graph ?? new Neo4jGraph(g.ns),
+      });
+      void this.graphRag.opts.embedder.warm?.().catch(() => {});
+    }
   }
 
   /** Mark that time passed before the next user message (world/sync.ts); attached to that turn. */
@@ -155,6 +182,7 @@ export class ChatSession {
       ...(this.world ? { world: this.world } : {}),
       ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact) } : {}),
       ...(this.page ? { page: this.page } : {}),
+      ...(this.knowledge ? { knowledge: this.knowledge } : {}),
       ...(this.recalled.length || this.page ? { now: this.turns.length } : {}),
     });
   }
@@ -218,6 +246,18 @@ export class ChatSession {
       this.store = new MemoryStore();
       if (this.memory.archive?.length) this.store.appendFacts(this.memory.archive);
     }
+    // The vector and graph stores are rebuilt from the snapshot (awaited before the first retrieval).
+    if (this.graphRag) {
+      const g = this.graphRag;
+      const upTo = this.memory.coveredUpTo;
+      this.knowledge = undefined;
+      this.ingestedUpTo = upTo;
+      this.rebuilding = g
+        .clear()
+        .then(() => g.ingestFacts(this.memory.archive ?? []))
+        .then(() => (upTo >= 0 ? g.ingestTurns(this.turns, 0, upTo) : 0))
+        .then(() => undefined);
+    }
   }
   private indexing?: Promise<void>;
 
@@ -225,6 +265,7 @@ export class ChatSession {
     await this.settle();
     await this.refreshRecall();
     this.refreshPage();
+    await this.refreshKnowledge();
     const res = await this.provider.generate(this.buildMessages(), {
       model: this.model,
       temperature: this.temperature,
@@ -255,6 +296,7 @@ export class ChatSession {
   close(): void {
     this.provider.dispose?.();
     if (this.ownStore) this.store?.close();
+    void this.graphRag?.close().catch(() => {});
   }
 
   /**
@@ -308,6 +350,7 @@ export class ChatSession {
     await this.settle();
     await this.refreshRecall();
     this.refreshPage();
+    await this.refreshKnowledge();
     let done: Parameters<NonNullable<GenerateOptions["onDone"]>>[0] | undefined;
     // With a filter on, the prefix up to the end of the first spoken line is held back so the
     // filter can edit it before the user sees it; the rest streams through untouched.
@@ -385,6 +428,17 @@ export class ChatSession {
       if (fresh.length) this.store.appendFacts(fresh);
       this.store.saveLedger(this.memory.coveredUpTo, this.memory);
     }
+    if (this.graphRag) {
+      // Off the user's path like the consolidation itself: new facts and triples, then the chunks
+      // whose last turn just left the verbatim window.
+      await this.rebuilding;
+      await this.graphRag.ingestFacts((this.memory.archive ?? []).slice(before));
+      const upTo = this.memory.coveredUpTo;
+      if (upTo > this.ingestedUpTo) {
+        await this.graphRag.ingestTurns(this.turns, this.ingestedUpTo + 1, upTo);
+        this.ingestedUpTo = upTo;
+      }
+    }
     const u = this.memoryManager.lastUsage;
     if (u) {
       this.memoryUsage.promptTokens += u.promptTokens;
@@ -432,7 +486,39 @@ export class ChatSession {
     this.page = { entity: pick.name, facts };
   }
 
-  private recalledMeta(): Pick<NonNullable<Turn["meta"]>, "recalled"> {
+  /** Graph RAG retrieval for the reply being generated (docs/14): one block from both stores. */
+  private async refreshKnowledge(): Promise<void> {
+    this.knowledge = undefined;
+    this.retrievalMeta = undefined;
+    if (!this.graphRag) return;
+    await this.rebuilding;
+    const last = [...this.turns].reverse().find((t) => t.role === "user");
+    if (!last) return;
+    const name = this.card.name[this.lang] ?? this.card.name.ko ?? this.card.id;
+    const t0 = performance.now();
+    const r = await this.graphRag.retrieve(last.content, { turnToMax: this.memory.coveredUpTo, ignore: [name, this.persona.name] });
+    const ms = Math.round(performance.now() - t0);
+    const block = renderGraphRag(r, this.turns.length, this.persona.name);
+    this.knowledge = block || undefined;
+    this.retrievalMeta = {
+      seeds: r.seeds,
+      edges: r.edges.length,
+      facts: r.facts.length,
+      chunks: r.chunks.length,
+      ms,
+      lines: [
+        ...r.edges.map((e) => ({ text: `${e.subject} ${e.relation} ${e.object}${e.current ? "" : " (no longer)"}: ${e.text}`, score: e.depth, why: "graph" as const, turnTo: e.turnTo })),
+        ...r.facts.map((x) => ({ text: x.text, score: Math.round(x.score * 1000) / 1000, why: "vector" as const, turnTo: x.turnTo })),
+        ...r.chunks.map((c) => ({ text: c.text, score: Math.round(c.score * 1000) / 1000, why: "chunk" as const, turnTo: c.turnTo })),
+      ],
+    };
+  }
+
+  private recalledMeta(): Pick<NonNullable<Turn["meta"]>, "recalled" | "retrieval"> {
+    if (this.retrievalMeta) {
+      const { lines, ...retrieval } = this.retrievalMeta;
+      return { retrieval, ...(lines.length ? { recalled: lines } : {}) };
+    }
     if (this.page) {
       return { recalled: this.page.facts.map((f) => ({ text: f.text, score: 0, why: "page" as const, turnTo: f.turnTo })) };
     }

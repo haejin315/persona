@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3" | "v4";
+  rules?: "v1" | "v2" | "v3" | "v4" | "v5";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -89,8 +89,9 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
-    const v3 = this.cfg.rules === "v3" || this.cfg.rules === "v4";
-    const v4 = this.cfg.rules === "v4";
+    const v5 = this.cfg.rules === "v5";
+    const v3 = this.cfg.rules === "v3" || this.cfg.rules === "v4" || v5;
+    const v4 = this.cfg.rules === "v4" || v5;
     const transcript = slice
       .map((t) => `${t.role === "user" ? "User" : name}: ${turnText(t)}`)
       .join("\n");
@@ -106,7 +107,7 @@ export class MemoryManager {
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
       ...(v4
         ? [
-            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]}]`,
+            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]${v5 ? ', "triple": {"subject": "one entity or concept", "relation": "short verb phrase", "object": "one entity or concept"}' : ""}}]`,
           ]
         : []),
       "}",
@@ -130,6 +131,11 @@ export class MemoryManager {
       ...(v4
         ? [
             `"new_facts" is the archive, separate from "facts": every concrete thing the NEW TRANSCRIPT lines state - a name, a number, a date, a title, a place, a preference, a promise, a change of plan - one fact per detail, attributed the same way, names verbatim. Do not merge it with existing memory and do not cap it; it keeps what the ${maxFacts}-fact list has to drop. Tag each with the proper nouns it contains.`,
+          ]
+        : []),
+      ...(v5
+        ? [
+            `"triple" is the same fact as a knowledge-graph edge: "subject" and "object" are each ONE entity or concept - a person, pet, place, shop, drink, object, habit, date, job - as a single word or short noun phrase in ${LANG_NAME[lang]} (the user by name, ${name} by name; never a sentence), "relation" is a short verb phrase in ${LANG_NAME[lang]} (키운다, 다닌다, 마신다, 산다, 일한다, 좋아한다, 약속했다, 바꿨다). A node is something one could ask about later - a named person, pet, place, shop, brand, title, job, a specific date like 11월 3일 - never a time word (오늘, 내일, 어제, 이번 주, weekdays), weather, a quantity or a passing gesture; a fact about those has no triple. When something changes, the new fact's triple has the same subject and relation with the new object (민수 마신다 라떼 replacing 민수 마신다 아메리카노). Omit "triple" when the fact has no clear subject and object.`,
           ]
         : []),
     ].join("\n");
@@ -165,7 +171,12 @@ export class MemoryManager {
           const ents = raw && typeof raw === "object" && Array.isArray((raw as { entities?: unknown }).entities)
             ? ((raw as { entities: unknown[] }).entities.filter((e): e is string => typeof e === "string" && e.trim().length >= 2).map((e) => e.trim()).slice(0, 8))
             : [];
-          return [{ ...f, turnFrom: from, turnTo: toExclusive - 1, ...(ents.length ? { entities: ents } : {}) }];
+          const t = raw && typeof raw === "object" ? (raw as { triple?: unknown }).triple : undefined;
+          const triple =
+            t && typeof t === "object" && ["subject", "relation", "object"].every((k) => typeof (t as Record<string, unknown>)[k] === "string" && ((t as Record<string, string>)[k] ?? "").trim())
+              ? { subject: (t as Record<string, string>).subject!.trim(), relation: (t as Record<string, string>).relation!.trim(), object: (t as Record<string, string>).object!.trim() }
+              : undefined;
+          return [{ ...f, turnFrom: from, turnTo: toExclusive - 1, ...(ents.length ? { entities: ents } : {}), ...(triple ? { triple } : {}) }];
         })
       : [];
     const archive = v4 || memory.archive ? [...(memory.archive ?? []), ...fresh] : undefined;

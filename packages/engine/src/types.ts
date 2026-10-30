@@ -122,7 +122,9 @@ export interface Turn {
      */
     boundary?: string;
     /** Archive entries shown next to MEMORY for this reply, with their match score (docs/12). */
-    recalled?: { text: string; score: number; why: "entity" | "vector" | "page"; turnTo?: number }[];
+    recalled?: { text: string; score: number; why: "entity" | "vector" | "page" | "graph" | "chunk"; turnTo?: number }[];
+    /** Graph RAG retrieval for this reply (docs/14): seed entities and how much each store returned. */
+    retrieval?: { seeds: string[]; edges: number; facts: number; chunks: number; ms: number };
   };
 }
 
@@ -160,6 +162,8 @@ export interface ArchivedFact extends Fact {
   turnTo: number;
   /** Proper nouns in the fact (people, pets, places, shops, titles): the exact index for recall. */
   entities?: string[];
+  /** The fact as subject → relation → object, for the knowledge graph (docs/14; memory rules v5). */
+  triple?: { subject: string; relation: string; object: string };
 }
 
 /** Accept a stored fact in either shape (old recordings hold plain strings). */
