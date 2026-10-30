@@ -13,6 +13,12 @@ export interface Triple {
   subject: string;
   relation: string;
   object: string;
+  /**
+   * The summariser's judgement (memory rules v6) that this triple replaces what held before about
+   * the same subject and relation. Without it, an older edge with another object stays current:
+   * 민수 그렸다 만화 and 민수 그렸다 달빛 고양이 are both true.
+   */
+  replaces?: boolean;
 }
 
 export interface GraphEdge extends Triple {
@@ -22,6 +28,8 @@ export interface GraphEdge extends Triple {
   current: boolean;
   /** Hops from the seed entity the query started at (1 = direct). */
   depth: number;
+  /** Cosine of the edge's fact to the user's message, when the retrieval ranked it (GraphRag). */
+  score?: number;
 }
 
 export interface GraphStore {
@@ -29,8 +37,13 @@ export interface GraphStore {
   addTriples(edges: Omit<GraphEdge, "current" | "depth">[]): Promise<void>;
   /** Entities in this namespace with how many edges touch each. */
   entities(): Promise<{ name: string; degree: number }[]>;
-  /** Edges within `hops` of any seed, most recent first, at most `limit`. */
-  neighborhood(seeds: string[], opts: { hops: number; limit: number }): Promise<GraphEdge[]>;
+  /**
+   * Edges within `hops` of any seed, nearest then most recent first, at most `limit`. A path may
+   * pass through a node in `hubs` (the speakers: on hundreds of edges) only along the relation it
+   * arrived by - 만화 ←그렸다— 민수 —그렸다→ 달빛 고양이 - otherwise every edge of the hub is two
+   * hops from everything.
+   */
+  neighborhood(seeds: string[], opts: { hops: number; limit: number; hubs?: string[] }): Promise<GraphEdge[]>;
   count(): Promise<{ nodes: number; edges: number }>;
   clear(): Promise<void>;
   close(): Promise<void>;
@@ -62,7 +75,7 @@ export class Neo4jGraph implements GraphStore {
   async addTriples(edges: Omit<GraphEdge, "current" | "depth">[]): Promise<void> {
     await this.ensure();
     const rows = edges
-      .map((e) => ({ ...e, subject: norm(e.subject), object: norm(e.object), relation: e.relation.trim() }))
+      .map((e) => ({ ...e, subject: norm(e.subject), object: norm(e.object), relation: e.relation.trim(), replaces: e.replaces === true }))
       .filter((e) => e.subject && e.object && e.relation && e.subject !== e.object);
     if (!rows.length) return;
     await this.driver.executeQuery(
@@ -70,9 +83,10 @@ export class Neo4jGraph implements GraphStore {
        MERGE (s:Entity {ns: $ns, name: r.subject})
        MERGE (o:Entity {ns: $ns, name: r.object})
        WITH s, o, r
-       // The same subject and relation pointing elsewhere: that was then, this is now.
+       // When the summariser judged this a change, the same subject and relation pointing elsewhere
+       // was then, and this is now.
        OPTIONAL MATCH (s)-[old:REL {ns: $ns, rel: r.relation, current: true}]->(other:Entity)
-         WHERE other <> o
+         WHERE other <> o AND r.replaces
        SET old.current = false
        WITH s, o, r
        MERGE (s)-[x:REL {ns: $ns, rel: r.relation, text: r.text}]->(o)
@@ -91,17 +105,20 @@ export class Neo4jGraph implements GraphStore {
     return res.records.map((r) => ({ name: r.get("name") as string, degree: n(r.get("degree")) }));
   }
 
-  async neighborhood(seeds: string[], opts: { hops: number; limit: number }): Promise<GraphEdge[]> {
+  async neighborhood(seeds: string[], opts: { hops: number; limit: number; hubs?: string[] }): Promise<GraphEdge[]> {
     await this.ensure();
     if (!seeds.length) return [];
     const names = seeds.map(norm);
+    const hubs = (opts.hubs ?? []).map(norm);
     const hops = Math.max(1, Math.min(3, opts.hops));
     // Variable-length paths from each seed; every relationship on a path is an edge, tagged with
-    // how far along the path it sits. Deduplicated by relationship id, newest first.
+    // how far along the path it sits. A hub in the middle of a path must be entered and left by
+    // the same relation. Deduplicated by relationship id, nearest then newest first.
     const res = await this.driver.executeQuery(
       `MATCH (seed:Entity {ns: $ns}) WHERE seed.name IN $names
        MATCH p = (seed)-[:REL*1..${hops}]-(x:Entity)
-       WITH relationships(p) AS rels
+       WITH relationships(p) AS rels, nodes(p) AS ns_
+       WHERE all(i IN range(1, size(ns_) - 2) WHERE NOT ns_[i].name IN $hubs OR rels[i - 1].rel = rels[i].rel)
        UNWIND range(0, size(rels) - 1) AS i
        WITH rels[i] AS r, i + 1 AS depth
        WHERE r.ns = $ns
@@ -110,7 +127,7 @@ export class Neo4jGraph implements GraphStore {
               r.text AS text, r.turnFrom AS turnFrom, r.turnTo AS turnTo, r.current AS current, depth
        ORDER BY depth ASC, turnTo DESC
        LIMIT $limit`,
-      { ns: this.ns, names, limit: neo4j.int(opts.limit) },
+      { ns: this.ns, names, hubs, limit: neo4j.int(opts.limit) },
     );
     const n = (v: unknown) => (neo4j.isInt(v) ? (v as { toNumber(): number }).toNumber() : Number(v));
     return res.records.map((r) => ({
@@ -152,7 +169,7 @@ export class MemoryGraph implements GraphStore {
     for (const e0 of edges) {
       const e = { ...e0, subject: norm(e0.subject), object: norm(e0.object), relation: e0.relation.trim() };
       if (!e.subject || !e.object || !e.relation || e.subject === e.object) continue;
-      for (const old of this.edges) if (old.subject === e.subject && old.relation === e.relation && old.object !== e.object) old.current = false;
+      if (e.replaces) for (const old of this.edges) if (old.subject === e.subject && old.relation === e.relation && old.object !== e.object) old.current = false;
       const dup = this.edges.find((x) => x.subject === e.subject && x.relation === e.relation && x.object === e.object && x.text === e.text);
       if (!dup) this.edges.push({ ...e, current: true, depth: 0 });
     }
@@ -167,20 +184,28 @@ export class MemoryGraph implements GraphStore {
     return [...deg.entries()].map(([name, degree]) => ({ name, degree }));
   }
 
-  async neighborhood(seeds: string[], opts: { hops: number; limit: number }): Promise<GraphEdge[]> {
-    const names = new Set(seeds.map(norm));
+  async neighborhood(seeds: string[], opts: { hops: number; limit: number; hubs?: string[] }): Promise<GraphEdge[]> {
+    const hubs = new Set((opts.hubs ?? []).map(norm));
     const found = new Map<GraphEdge, number>();
-    let frontier = new Set(names);
+    // Frontier nodes with the relations the walk arrived by (null = a seed, any relation leaves).
+    let frontier = new Map<string, Set<string> | null>(seeds.map((s) => [norm(s), null]));
+    const seen = new Set(frontier.keys());
     for (let d = 1; d <= opts.hops && frontier.size; d++) {
-      const next = new Set<string>();
+      const next = new Map<string, Set<string> | null>();
       for (const e of this.edges) {
-        if (frontier.has(e.subject) || frontier.has(e.object)) {
+        for (const [here, there] of [[e.subject, e.object], [e.object, e.subject]] as const) {
+          if (!frontier.has(here)) continue;
+          const arrived = frontier.get(here);
+          // A hub is crossed only along the relation that led into it.
+          if (arrived && hubs.has(here) && !arrived.has(e.relation)) continue;
           if (!found.has(e)) found.set(e, d);
-          next.add(e.subject);
-          next.add(e.object);
+          if (seen.has(there)) continue;
+          const rels = next.get(there) ?? new Set<string>();
+          rels.add(e.relation);
+          next.set(there, rels);
         }
       }
-      for (const n of frontier) next.delete(n);
+      for (const n of next.keys()) seen.add(n);
       frontier = next;
     }
     return [...found.entries()]

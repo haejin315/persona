@@ -507,7 +507,13 @@ export class ChatSession {
       chunks: r.chunks.length,
       ms,
       lines: [
-        ...r.edges.map((e) => ({ text: `${e.subject} ${e.relation} ${e.object}${e.current ? "" : " (no longer)"}: ${e.text}`, score: e.depth, why: "graph" as const, turnTo: e.turnTo })),
+        ...r.edges.map((e) => ({
+          text: `${e.subject} ${e.relation} ${e.object}${e.current ? "" : " (no longer)"}: ${e.text}`,
+          // Similarity to the message when ranked (round 2), else the hop depth (round 1).
+          score: e.score !== undefined ? Math.round(e.score * 1000) / 1000 : e.depth,
+          why: "graph" as const,
+          turnTo: e.turnTo,
+        })),
         ...r.facts.map((x) => ({ text: x.text, score: Math.round(x.score * 1000) / 1000, why: "vector" as const, turnTo: x.turnTo })),
         ...r.chunks.map((c) => ({ text: c.text, score: Math.round(c.score * 1000) / 1000, why: "chunk" as const, turnTo: c.turnTo })),
       ],

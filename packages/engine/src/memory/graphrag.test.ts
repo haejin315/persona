@@ -5,7 +5,7 @@ import { ChatSession } from "../session.js";
 import { emptyMemory, type ArchivedFact, type Turn } from "../types.js";
 import { chunkAll, chunkRange } from "./chunker.js";
 import { MemoryGraph } from "./graphdb.js";
-import { GraphRag, renderGraphRag } from "./graphrag.js";
+import { GraphRag, factId, renderGraphRag } from "./graphrag.js";
 import { bigramEmbedder } from "./recall.js";
 import { MemoryVectorIndex, uuidFor } from "./vectordb.js";
 
@@ -18,8 +18,11 @@ const facts: ArchivedFact[] = [
   { text: "민수는 고양이 보리를 키운다", source: "user", turnFrom: 0, turnTo: 3, entities: ["민수", "보리"], triple: { subject: "민수", relation: "키운다", object: "보리" } },
   { text: "보리는 하늘 동물병원에 다닌다", source: "user", turnFrom: 4, turnTo: 7, entities: ["보리", "하늘 동물병원"], triple: { subject: "보리", relation: "다닌다", object: "하늘 동물병원" } },
   { text: "민수는 아침마다 아메리카노를 마신다", source: "user", turnFrom: 0, turnTo: 3, triple: { subject: "민수", relation: "마신다", object: "아메리카노" } },
-  { text: "민수는 위가 아파서 라떼로 바꿨다", source: "user", turnFrom: 8, turnTo: 11, triple: { subject: "민수", relation: "마신다", object: "라떼" } },
+  { text: "민수는 위가 아파서 라떼로 바꿨다", source: "user", turnFrom: 8, turnTo: 11, triple: { subject: "민수", relation: "마신다", object: "라떼", replaces: true } },
   { text: "하늘 동물병원은 성수동에 있다", source: "user", turnFrom: 8, turnTo: 11, triple: { subject: "하늘 동물병원", relation: "있다", object: "성수동" } },
+  { text: "민수는 어릴 때 만화를 그렸다", source: "user", turnFrom: 4, turnTo: 7, triple: { subject: "민수", relation: "그렸다", object: "만화" } },
+  { text: "민수가 그린 만화 제목은 달빛 고양이다", source: "user", turnFrom: 8, turnTo: 11, triple: { subject: "민수", relation: "그렸다", object: "달빛 고양이" } },
+  { text: "하루는 보리 사진을 꼭 보여 달라고 했다", source: "self", turnFrom: 4, turnTo: 7, triple: { subject: "하루", relation: "부탁했다", object: "보리 사진" } },
 ];
 
 describe("Graph RAG memory (docs/14)", () => {
@@ -35,31 +38,45 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(uuidFor("c0-3")).toBe(uuidFor("c0-3"));
   });
 
-  it("the graph keeps one edge per triple, marks a replaced object as no longer current, and walks hops", async () => {
+  it("the graph keeps one edge per triple, supersedes only when the summariser said so, and walks hops", async () => {
     const g = new MemoryGraph();
     await g.addTriples(facts.map((f) => ({ ...f.triple!, text: f.text, turnFrom: f.turnFrom, turnTo: f.turnTo })));
-    expect(await g.count()).toEqual({ nodes: 6, edges: 5 });
+    expect(await g.count()).toEqual({ nodes: 10, edges: 8 });
     const one = await g.neighborhood(["보리"], { hops: 1, limit: 10 });
     expect(one.map((e) => e.object).sort()).toEqual(["보리", "하늘 동물병원"]);
-    const two = await g.neighborhood(["보리"], { hops: 2, limit: 10 });
+    const two = await g.neighborhood(["보리"], { hops: 2, limit: 20 });
     expect(two.some((e) => e.object === "성수동" && e.depth === 2)).toBe(true);
     expect(two.some((e) => e.object === "라떼" && e.depth === 2)).toBe(true);
+    // 마신다 라떼 carried replaces: true, so 아메리카노 is no longer current.
     const drinks = two.filter((e) => e.relation === "마신다");
     expect(drinks.find((e) => e.object === "아메리카노")!.current).toBe(false);
     expect(drinks.find((e) => e.object === "라떼")!.current).toBe(true);
+    // 그렸다 달빛 고양이 did not: both drawings stay true (round 1 marked 897 such lines "no longer").
+    const drew = two.filter((e) => e.relation === "그렸다");
+    expect(drew).toHaveLength(2);
+    expect(drew.every((e) => e.current)).toBe(true);
+    // With 민수 declared a hub, a path crosses it only along one relation: from 만화 the walk reaches
+    // 달빛 고양이 (그렸다 both ways) but not 보리 or 라떼 (키운다, 마신다).
+    const viaHub = await g.neighborhood(["만화"], { hops: 2, limit: 20, hubs: ["민수"] });
+    expect(viaHub.map((e) => e.object).sort()).toEqual(["달빛 고양이", "만화"]);
+    const free = await g.neighborhood(["만화"], { hops: 2, limit: 20 });
+    expect(free.some((e) => e.object === "라떼")).toBe(true);
   });
 
   it("retrieves graph edges, nearest facts and verbatim chunks for a message, and renders one block", async () => {
     const rag = new GraphRag({ ns: "t", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: new MemoryGraph(), chunkK: 2, factK: 3, hops: 2 });
     await rag.ingestFacts(facts);
     expect(await rag.ingestTurns(transcript, 0, 11)).toBe(5);
-    expect(await rag.counts()).toEqual({ chunks: 5, facts: 5, nodes: 6, edges: 5 });
+    expect(await rag.counts()).toEqual({ chunks: 5, facts: 8, nodes: 10, edges: 8 });
     const r = await rag.retrieve("보리 병원은 어디였죠?", { turnToMax: 7, ignore: ["하루", "민수"] });
-    expect(r.seeds).toEqual(["보리"]);
+    // Whole name and token: "보리" also wakes the node "보리 사진".
+    expect(r.seeds).toEqual(["보리", "보리 사진"]);
     expect(r.edges.some((e) => e.object === "하늘 동물병원")).toBe(true);
     expect(r.chunks.every((c) => c.turnTo <= 7)).toBe(true);
     expect(r.chunks[0]!.text).toContain("하늘 동물병원");
-    expect(r.facts).toHaveLength(3);
+    // Facts come in two pools: about the user (factK), then the character's own lines (selfK).
+    expect(r.facts.filter((f) => !f.self)).toHaveLength(3);
+    expect(r.facts.filter((f) => f.self).map((f) => f.text)).toEqual(["하루는 보리 사진을 꼭 보여 달라고 했다"]);
     const block = renderGraphRag(r, 40, "민수");
     expect(block).toContain("KNOWLEDGE GRAPH");
     expect(block).toContain("보리 —다닌다→ 하늘 동물병원");
@@ -74,6 +91,48 @@ describe("Graph RAG memory (docs/14)", () => {
     // Speaker names seed nothing; with no seed and no stores touched, the block is empty.
     const empty = new GraphRag({ ns: "e", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: new MemoryGraph() });
     expect(renderGraphRag(await empty.retrieve("고마워요, 하루 씨", { ignore: ["하루"] }), 10, "민수")).toBe("");
+  });
+
+  it("links a node by a token of its name and ranks the neighbourhood by similarity to the message, not recency", async () => {
+    // 민수 is a hub with many recent edges; the one the message is about is the oldest.
+    const g = new MemoryGraph();
+    const seats: ArchivedFact[] = Array.from({ length: 12 }, (_, i) => ({
+      text: `민수는 ${i}번째 창가 자리에 앉았다`,
+      source: "user",
+      turnFrom: 100 + i,
+      turnTo: 100 + i,
+      triple: { subject: "민수", relation: "앉았다", object: `창가 자리 ${i}` },
+    }));
+    const visits: ArchivedFact[] = Array.from({ length: 8 }, (_, i) => ({
+      text: `민수는 ${i}번째 서점에 들른다`,
+      source: "user",
+      turnFrom: 200 + i,
+      turnTo: 200 + i,
+      triple: { subject: "민수", relation: "들른다", object: `서점 ${i}` },
+    }));
+    const home: ArchivedFact = { text: "민수는 이사 전 대전 본가에 들른다", source: "user", turnFrom: 10, turnTo: 10, triple: { subject: "민수", relation: "들른다", object: "대전 본가" } };
+    const all = [home, ...seats, ...visits];
+    const rag = new GraphRag({ ns: "r", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, edgeCandidates: 60, factK: 2, selfK: 0 });
+    await rag.ingestFacts(all);
+    // "본가" is a token of the node "대전 본가": the node seeds; 민수 (hub, on all 21 edges) does not.
+    const r = await rag.retrieve("제 본가가 어디라고 했는지 기억하세요?", { ignore: ["하루", "민수"] });
+    expect(r.seeds).toEqual(["대전 본가"]);
+    // Depth 1 is the 본가 edge; depth 2 crosses the hub 민수 only along 들른다, so the 8 bookshop
+    // visits are candidates and the 12 seats are not. Ranking by similarity to the message puts the
+    // edge the message is about first, although it is the oldest, and records its score.
+    expect(r.edges).toHaveLength(3);
+    expect(r.edges[0]!.object).toBe("대전 본가");
+    expect(r.edges[0]!.score).toBeGreaterThan(r.edges[1]!.score ?? 0);
+    expect(r.edges.every((e) => e.relation === "들른다")).toBe(true);
+    expect(factId(home)).toBe("f10-10:민수는 이사 전 대전 본가에 들른다");
+    // Without ranking (edgeCandidates 0) the graph's own order wins: depth 1 first, then newest.
+    const plain = new GraphRag({ ns: "p", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, edgeCandidates: 0, tokenLinking: false });
+    const p = await plain.retrieve("대전 본가 기억하세요?", { ignore: ["하루", "민수"] });
+    expect(p.edges[0]!.object).toBe("대전 본가");
+    expect(p.edges[1]!.object).toBe("서점 7");
+    expect(p.edges[0]!.score).toBeUndefined();
+    // Whole-name linking only: "본가" alone wakes nothing.
+    expect((await plain.retrieve("제 본가가 어디였죠", { ignore: ["하루", "민수"] })).seeds).toEqual([]);
   });
 
   it("a session with graphRag shows the retrieved block as a context message and records the retrieval on the reply", async () => {
@@ -103,9 +162,12 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(ctx).toContain("KNOWLEDGE GRAPH");
     expect(ctx).toContain("하늘 동물병원");
     expect(prompt[0]).not.toContain("KNOWLEDGE GRAPH");
-    expect(reply.meta?.retrieval).toMatchObject({ seeds: ["보리"] });
+    expect(reply.meta?.retrieval?.seeds).toContain("보리");
     expect(reply.meta?.retrieval!.edges).toBeGreaterThan(0);
-    expect(reply.meta?.recalled?.some((x) => x.why === "graph")).toBe(true);
+    const graphLines = reply.meta?.recalled?.filter((x) => x.why === "graph") ?? [];
+    expect(graphLines.length).toBeGreaterThan(0);
+    // Ranked: the recorded score is a cosine, not a hop depth.
+    expect(graphLines.every((x) => x.score <= 1)).toBe(true);
     expect(reply.meta?.recalled?.some((x) => x.why === "chunk")).toBe(true);
     s.close();
   });

@@ -68,7 +68,7 @@ export interface Arm {
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in
    * context instead of a summary.
    */
-  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4" | "v5"; maxFacts?: number; maxFactChars?: number };
+  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6"; maxFacts?: number; maxFactChars?: number };
   /**
    * Recall from the fact archive before each reply (docs/12; needs memory rules v4). `embedder`
    * "local" = multilingual-e5-small through transformers.js on the CPU (default), "bigram" = hashed
@@ -85,7 +85,7 @@ export interface Arm {
    * docker-compose.yml): transcript chunks + facts in the vector database, fact triples in the
    * graph; the user's message seeds the graph and queries the vectors before each reply.
    */
-  graphRag?: { chunkK?: number; factK?: number; hops?: number; edgeLimit?: number; minScore?: number };
+  graphRag?: { chunkK?: number; factK?: number; selfK?: number; hops?: number; edgeLimit?: number; edgeCandidates?: number; minScore?: number; tokenLinking?: boolean };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };
 }

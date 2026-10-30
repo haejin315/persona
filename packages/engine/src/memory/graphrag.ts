@@ -10,6 +10,13 @@ import type { VectorIndex } from "./vectordb.js";
  * knowledge graph. Before a reply, the user's message seeds the graph (entity linking by name),
  * its neighbourhood is read, and the vector database answers the paraphrase side with the chunks
  * and facts nearest the message. All three are rendered into one context block.
+ *
+ * Round 2 (docs/14 결과 1 → 2): the graph widens the candidate set and the vectors rank it - the
+ * neighbourhood's edges are scored against the message through the fact vectors already in the
+ * store, instead of being cut by recency, because a 2-hop walk through a hub (the user, the
+ * character) otherwise returns that hub's latest edges whatever the message was. Facts are queried
+ * in two pools, about the user and the character's own lines, because the latter took 87% of the
+ * vector hits in round 1. A node also seeds on a token of its name (본가 → 대전 본가).
  */
 
 export interface GraphRagOptions {
@@ -20,12 +27,22 @@ export interface GraphRagOptions {
   graph: GraphStore;
   /** Raw transcript chunks shown per reply (default 3). */
   chunkK?: number;
-  /** Facts shown per reply (default 5). */
+  /** Facts about the user (source other than "self") shown per reply (default 5). */
   factK?: number;
+  /**
+   * The character's own lines (source "self") shown per reply (default 2). Negative = no split:
+   * one query of `factK` over all facts, as in round 1.
+   */
+  selfK?: number;
   /** Graph hops from the seed entities (default 2). */
   hops?: number;
-  /** Edges shown per reply (default 12). */
+  /** Edges shown per reply (default 12). 0 = the graph is not read. */
   edgeLimit?: number;
+  /**
+   * Edges read from the graph before ranking by similarity to the message (default 60). At most
+   * `edgeLimit` of them are shown. 0 = no ranking: the graph's own order (depth, then recency).
+   */
+  edgeCandidates?: number;
   /** Vector hits below this cosine are dropped (default 0, keep all). */
   minScore?: number;
   /**
@@ -34,6 +51,11 @@ export interface GraphRagOptions {
    * Default 0.1, with a floor of 10 edges so a young graph excludes nothing.
    */
   maxHubShare?: number;
+  /**
+   * Seed a node when the message holds any token (2+ characters) of its name, not only the whole
+   * name (default true): "본가" wakes "대전 본가".
+   */
+  tokenLinking?: boolean;
   chunking?: ChunkOptions;
 }
 
@@ -41,8 +63,11 @@ export interface GraphRagResult {
   seeds: string[];
   edges: GraphEdge[];
   chunks: { id: string; text: string; turnFrom: number; turnTo: number; score: number }[];
-  facts: { text: string; turnFrom: number; turnTo: number; score: number }[];
+  facts: { text: string; turnFrom: number; turnTo: number; score: number; self: boolean }[];
 }
+
+/** The id a fact has in the facts collection; an edge carries the same fields, so it maps back. */
+export const factId = (f: { turnFrom: number; turnTo: number; text: string }) => `f${f.turnFrom}-${f.turnTo}:${f.text}`;
 
 export class GraphRag {
   private names?: Promise<{ name: string; degree: number }[]>;
@@ -72,7 +97,11 @@ export class GraphRag {
     const vectors = await this.opts.embedder.embed(facts.map((f) => f.text), "passage");
     await this.opts.vectors.upsert(
       this.factsCollection,
-      facts.map((f, i) => ({ id: `f${f.turnFrom}-${f.turnTo}:${f.text}`, vector: vectors[i]!, payload: { text: f.text, turnFrom: f.turnFrom, turnTo: f.turnTo } })),
+      facts.map((f, i) => ({
+        id: factId(f),
+        vector: vectors[i]!,
+        payload: { text: f.text, turnFrom: f.turnFrom, turnTo: f.turnTo, self: f.source === "self", source: f.source },
+      })),
     );
     const edges = facts.flatMap((f) => (f.triple ? [{ ...f.triple, text: f.text, turnFrom: f.turnFrom, turnTo: f.turnTo }] : []));
     if (edges.length) {
@@ -82,36 +111,78 @@ export class GraphRag {
   }
 
   /**
+   * Entity linking: the graph's nodes the message names (whole name, or a token of it), and the
+   * hubs - nodes on more than `maxHubShare` of all edges - which seed nothing and are crossed only
+   * along one relation.
+   */
+  private async seeds(message: string, ignore: Set<string>): Promise<{ seeds: string[]; hubs: string[] }> {
+    const nodes = await (this.names ??= this.opts.graph.entities());
+    const totalEdges = nodes.reduce((a, n) => a + n.degree, 0) / 2;
+    const hub = Math.max(10, (this.opts.maxHubShare ?? 0.1) * totalEdges);
+    const tokens = this.opts.tokenLinking ?? true;
+    const named = (name: string) =>
+      message.includes(name) || (tokens && name.split(/\s+/).some((tok) => tok.length >= 2 && tok !== name && message.includes(tok)));
+    return {
+      seeds: nodes.filter((n) => n.name.length >= 2 && !ignore.has(n.name) && n.degree <= hub && named(n.name)).map((n) => n.name),
+      hubs: nodes.filter((n) => n.degree > hub || ignore.has(n.name)).map((n) => n.name),
+    };
+  }
+
+  /**
    * Everything the stores hold that bears on the user's latest message. `turnToMax` keeps the
    * turns still verbatim in the prompt out of the vector hits; `ignore` are the speakers' names,
    * which seed nothing (they touch every edge).
    */
   async retrieve(message: string, o: { turnToMax?: number; ignore?: string[] } = {}): Promise<GraphRagResult> {
     const ignore = new Set((o.ignore ?? []).map((s) => s.replace(/\s*(씨|님)$/u, "")));
-    const nodes = await (this.names ??= this.opts.graph.entities());
-    const totalEdges = nodes.reduce((a, n) => a + n.degree, 0) / 2;
-    const hub = Math.max(10, (this.opts.maxHubShare ?? 0.1) * totalEdges);
-    const seeds = nodes.filter((n) => n.name.length >= 2 && !ignore.has(n.name) && n.degree <= hub && message.includes(n.name)).map((n) => n.name);
-    const [edges, [qv]] = await Promise.all([
-      seeds.length ? this.opts.graph.neighborhood(seeds, { hops: this.opts.hops ?? 2, limit: this.opts.edgeLimit ?? 12 }) : Promise.resolve([]),
+    const edgeLimit = this.opts.edgeLimit ?? 12;
+    const candidates = this.opts.edgeCandidates ?? 60;
+    const { seeds, hubs } = edgeLimit > 0 ? await this.seeds(message, ignore) : { seeds: [], hubs: [] };
+    const [candidateEdges, [qv]] = await Promise.all([
+      seeds.length
+        ? this.opts.graph.neighborhood(seeds, { hops: this.opts.hops ?? 2, limit: Math.max(edgeLimit, candidates), hubs })
+        : Promise.resolve([] as GraphEdge[]),
       this.opts.embedder.embed([message], "query"),
     ]);
-    const filter = o.turnToMax !== undefined ? { turnToMax: o.turnToMax } : undefined;
-    const [chunkHits, factHits] = await Promise.all([
-      this.opts.vectors.search(this.chunksCollection, qv!, { limit: this.opts.chunkK ?? 3, ...(filter ? { filter } : {}) }),
-      this.opts.vectors.search(this.factsCollection, qv!, { limit: this.opts.factK ?? 5, ...(filter ? { filter } : {}) }),
+    const filter = o.turnToMax !== undefined ? { turnToMax: o.turnToMax } : {};
+    const selfK = this.opts.selfK ?? 2;
+    const factK = this.opts.factK ?? 5;
+    const [chunkHits, userFactHits, selfFactHits, edgeScores] = await Promise.all([
+      this.opts.vectors.search(this.chunksCollection, qv!, { limit: this.opts.chunkK ?? 3, filter }),
+      selfK < 0
+        ? this.opts.vectors.search(this.factsCollection, qv!, { limit: factK, filter })
+        : this.opts.vectors.search(this.factsCollection, qv!, { limit: factK, filter: { ...filter, self: false } }),
+      selfK > 0 ? this.opts.vectors.search(this.factsCollection, qv!, { limit: selfK, filter: { ...filter, self: true } }) : Promise.resolve([]),
+      candidates > 0 && candidateEdges.length > 0
+        ? this.opts.vectors.search(this.factsCollection, qv!, { limit: candidateEdges.length, filter: { ids: [...new Set(candidateEdges.map(factId))] } })
+        : Promise.resolve([]),
     ]);
+    // Rank the neighbourhood by how close each edge's fact is to the message; edges whose fact the
+    // vector store does not hold keep the graph's order after the scored ones.
+    let edges = candidateEdges;
+    if (candidates > 0 && candidateEdges.length) {
+      const score = new Map(edgeScores.map((h) => [h.id, h.score]));
+      edges = candidateEdges
+        .map((e) => ({ ...e, score: score.get(factId(e)) }))
+        .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.depth - b.depth || b.turnTo - a.turnTo);
+    }
+    edges = edges.slice(0, edgeLimit);
     const min = this.opts.minScore ?? 0;
     const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
+    const fact = (h: { payload: Record<string, unknown>; score: number }) => ({
+      text: String(h.payload.text ?? ""),
+      turnFrom: num(h.payload.turnFrom),
+      turnTo: num(h.payload.turnTo),
+      score: h.score,
+      self: Boolean(h.payload.self),
+    });
     return {
       seeds,
       edges,
       chunks: chunkHits
         .filter((h) => h.score >= min)
         .map((h) => ({ id: h.id, text: String(h.payload.text ?? ""), turnFrom: num(h.payload.turnFrom), turnTo: num(h.payload.turnTo), score: h.score })),
-      facts: factHits
-        .filter((h) => h.score >= min)
-        .map((h) => ({ text: String(h.payload.text ?? ""), turnFrom: num(h.payload.turnFrom), turnTo: num(h.payload.turnTo), score: h.score })),
+      facts: [...userFactHits, ...selfFactHits].filter((h) => h.score >= min).map(fact),
     };
   }
 

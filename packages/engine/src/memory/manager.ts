@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3" | "v4" | "v5";
+  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -89,7 +89,8 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
-    const v5 = this.cfg.rules === "v5";
+    const v6 = this.cfg.rules === "v6";
+    const v5 = this.cfg.rules === "v5" || v6;
     const v3 = this.cfg.rules === "v3" || this.cfg.rules === "v4" || v5;
     const v4 = this.cfg.rules === "v4" || v5;
     const transcript = slice
@@ -107,7 +108,7 @@ export class MemoryManager {
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
       ...(v4
         ? [
-            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]${v5 ? ', "triple": {"subject": "one entity or concept", "relation": "short verb phrase", "object": "one entity or concept"}' : ""}}]`,
+            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]${v5 ? `, "triple": {"subject": "one entity or concept", "relation": "short verb phrase", "object": "one entity or concept"${v6 ? ', "replaces": "true only when this changes what held before about the same subject and relation"' : ""}}` : ""}}]`,
           ]
         : []),
       "}",
@@ -136,6 +137,11 @@ export class MemoryManager {
       ...(v5
         ? [
             `"triple" is the same fact as a knowledge-graph edge: "subject" and "object" are each ONE entity or concept - a person, pet, place, shop, drink, object, habit, date, job - as a single word or short noun phrase in ${LANG_NAME[lang]} (the user by name, ${name} by name; never a sentence), "relation" is a short verb phrase in ${LANG_NAME[lang]} (키운다, 다닌다, 마신다, 산다, 일한다, 좋아한다, 약속했다, 바꿨다). A node is something one could ask about later - a named person, pet, place, shop, brand, title, job, a specific date like 11월 3일 - never a time word (오늘, 내일, 어제, 이번 주, weekdays), weather, a quantity or a passing gesture; a fact about those has no triple. When something changes, the new fact's triple has the same subject and relation with the new object (민수 마신다 라떼 replacing 민수 마신다 아메리카노). Omit "triple" when the fact has no clear subject and object.`,
+          ]
+        : []),
+      ...(v6
+        ? [
+            `"replaces": true on a triple means the old fact with the same subject and relation no longer holds (a new drink, a new home, a changed plan). Two facts that both stay true (민수 그렸다 만화 and 민수 그렸다 달빛 고양이; two different promises) are NOT a replacement - leave "replaces" out. This is a judgement about the story, not about the words. A node is also never a phrase built on a time word (토요일 컵, 금요일 마감, 내일 얘기 are not nodes - the node there is 컵, 마감, or none): what one could ask about later is the thing, not the day.`,
           ]
         : []),
     ].join("\n");
@@ -174,7 +180,12 @@ export class MemoryManager {
           const t = raw && typeof raw === "object" ? (raw as { triple?: unknown }).triple : undefined;
           const triple =
             t && typeof t === "object" && ["subject", "relation", "object"].every((k) => typeof (t as Record<string, unknown>)[k] === "string" && ((t as Record<string, string>)[k] ?? "").trim())
-              ? { subject: (t as Record<string, string>).subject!.trim(), relation: (t as Record<string, string>).relation!.trim(), object: (t as Record<string, string>).object!.trim() }
+              ? {
+                  subject: (t as Record<string, string>).subject!.trim(),
+                  relation: (t as Record<string, string>).relation!.trim(),
+                  object: (t as Record<string, string>).object!.trim(),
+                  ...((t as Record<string, unknown>).replaces === true ? { replaces: true } : {}),
+                }
               : undefined;
           return [{ ...f, turnFrom: from, turnTo: toExclusive - 1, ...(ents.length ? { entities: ents } : {}), ...(triple ? { triple } : {}) }];
         })

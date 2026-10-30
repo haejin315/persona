@@ -23,6 +23,10 @@ export interface VectorHitRow {
 export interface VectorFilter {
   /** Only points whose payload.turnTo is at most this (keeps the verbatim window out of recall). */
   turnToMax?: number;
+  /** Only these points (string ids as given to upsert): scores a known candidate set against the query. */
+  ids?: string[];
+  /** Only points whose payload.self equals this (the character's own lines vs facts about the user). */
+  self?: boolean;
 }
 
 export interface VectorIndex {
@@ -60,6 +64,7 @@ export class QdrantIndex implements VectorIndex {
     if (!exists.exists) {
       await this.client.createCollection(collection, { vectors: { size: dims, distance: "Cosine" } });
       await this.client.createPayloadIndex(collection, { field_name: "turnTo", field_schema: "integer", wait: true });
+      await this.client.createPayloadIndex(collection, { field_name: "self", field_schema: "bool", wait: true });
     }
     this.ensured.add(collection);
   }
@@ -76,8 +81,14 @@ export class QdrantIndex implements VectorIndex {
   async search(collection: string, vector: number[], opts: { limit: number; filter?: VectorFilter }): Promise<VectorHitRow[]> {
     const exists = await this.client.collectionExists(collection);
     if (!exists.exists) return [];
-    const filter =
-      opts.filter?.turnToMax !== undefined ? { must: [{ key: "turnTo", range: { lte: opts.filter.turnToMax } }] } : undefined;
+    const must: Record<string, unknown>[] = [];
+    if (opts.filter?.turnToMax !== undefined) must.push({ key: "turnTo", range: { lte: opts.filter.turnToMax } });
+    if (opts.filter?.self !== undefined) must.push({ key: "self", match: { value: opts.filter.self } });
+    if (opts.filter?.ids) {
+      if (!opts.filter.ids.length) return [];
+      must.push({ has_id: opts.filter.ids.map(uuidFor) });
+    }
+    const filter = must.length ? { must } : undefined;
     const res = await this.client.query(collection, { query: vector, limit: opts.limit, with_payload: true, ...(filter ? { filter } : {}) });
     return res.points.map((r) => ({ id: String((r.payload as { key?: string } | null)?.key ?? r.id), score: r.score, payload: (r.payload ?? {}) as Record<string, unknown> }));
   }
@@ -111,9 +122,12 @@ export class MemoryVectorIndex implements VectorIndex {
     const c = this.data.get(collection);
     if (!c) return [];
     const out: VectorHitRow[] = [];
+    const ids = opts.filter?.ids ? new Set(opts.filter.ids) : undefined;
     for (const p of c.values()) {
       const turnTo = p.payload.turnTo as number | undefined;
       if (opts.filter?.turnToMax !== undefined && turnTo !== undefined && turnTo > opts.filter.turnToMax) continue;
+      if (opts.filter?.self !== undefined && Boolean(p.payload.self) !== opts.filter.self) continue;
+      if (ids && !ids.has(p.id)) continue;
       let dot = 0;
       for (let i = 0; i < vector.length; i++) dot += vector[i]! * p.vector[i]!;
       out.push({ id: p.id, score: dot, payload: p.payload });

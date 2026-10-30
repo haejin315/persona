@@ -162,8 +162,12 @@ export interface ArchivedFact extends Fact {
   turnTo: number;
   /** Proper nouns in the fact (people, pets, places, shops, titles): the exact index for recall. */
   entities?: string[];
-  /** The fact as subject → relation → object, for the knowledge graph (docs/14; memory rules v5). */
-  triple?: { subject: string; relation: string; object: string };
+  /**
+   * The fact as subject → relation → object, for the knowledge graph (docs/14; memory rules v5).
+   * `replaces` (rules v6) is the summariser's judgement that this changes what held before about
+   * the same subject and relation (a new drink, a new home); only then is the old edge superseded.
+   */
+  triple?: { subject: string; relation: string; object: string; replaces?: boolean };
 }
 
 /** Accept a stored fact in either shape (old recordings hold plain strings). */
