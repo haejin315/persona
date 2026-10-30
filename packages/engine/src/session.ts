@@ -1,6 +1,7 @@
 import { firstSpeechComplete, firstSpeechLine, stripRepeatedOpener } from "./filters.js";
 import { DEFAULT_MEMORY_CONFIG, MemoryManager, type MemoryConfig } from "./memory/manager.js";
 import { Recall, type Embedder, type RecallHit, type RecallOptions } from "./memory/recall.js";
+import { MemoryStore, type StoredFact } from "./memory/store.js";
 import { getPromptVersion, type PromptVersion } from "./prompt/builder.js";
 import type { GenerateOptions, LLMProvider } from "./providers/types.js";
 import {
@@ -32,6 +33,13 @@ export interface SessionOptions {
    * Needs memory rules v4 to fill the archive.
    */
   recall?: RecallOptions & { embedder: Embedder };
+  /**
+   * Entity-page recall (docs/13): every fact the summariser extracted goes to a MemoryStore, and
+   * when the user's latest message names a proper noun the store knows but MEMORY does not carry,
+   * everything about that one noun is shown as a page, oldest first. Nothing is shown otherwise.
+   * Needs memory rules v4. Without `store` the session keeps one in memory (rebuilt on restore).
+   */
+  pageRecall?: { maxLines?: number; maxShare?: number; minFacts?: number; store?: MemoryStore };
   model?: string;
   temperature?: number;
   /** Passed to the provider on every reply; "off" answers without extended thinking where the model allows (docs/11). */
@@ -80,6 +88,11 @@ export class ChatSession {
   private recall?: Recall;
   /** Archive entries shown next to MEMORY for the reply being generated (docs/12). */
   recalled: RecallHit[] = [];
+  /** The entity page shown for the reply being generated (docs/13). */
+  page?: { entity: string; facts: StoredFact[] };
+  private store?: MemoryStore;
+  private ownStore = false;
+  private pageOpts?: { maxLines?: number; maxShare?: number; minFacts?: number };
   private model?: string;
   private temperature?: number;
   private thinking?: "off" | "adaptive";
@@ -109,6 +122,12 @@ export class ChatSession {
       this.recall = new Recall(opts.recall.embedder, { ...opts.recall, ignoreEntities: [...(opts.recall.ignoreEntities ?? []), name, this.persona.name] });
       void this.recall.warm().catch(() => {});
     }
+    if (opts.pageRecall) {
+      const { store, ...rest } = opts.pageRecall;
+      this.pageOpts = rest;
+      this.store = store ?? new MemoryStore();
+      this.ownStore = !store;
+    }
   }
 
   /** Mark that time passed before the next user message (world/sync.ts); attached to that turn. */
@@ -134,7 +153,9 @@ export class ChatSession {
       recent: this.memoryManager.recentWindow(this.turns),
       persona: this.persona,
       ...(this.world ? { world: this.world } : {}),
-      ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact), now: this.turns.length } : {}),
+      ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact) } : {}),
+      ...(this.page ? { page: this.page } : {}),
+      ...(this.recalled.length || this.page ? { now: this.turns.length } : {}),
     });
   }
 
@@ -188,14 +209,22 @@ export class ChatSession {
     this.memory = normalizeMemory(structuredClone(snap.memory));
     this.persona = { ...snap.persona };
     this.recalled = [];
+    this.page = undefined;
     // A restored archive has to be embedded before the first recall query (awaited there).
     if (this.recall && this.memory.archive?.length) this.indexing = this.recall.index(this.memory.archive).catch(() => {});
+    // A session-owned store is rebuilt from the archive; a caller's store is already the truth.
+    if (this.store && this.ownStore) {
+      this.store.close();
+      this.store = new MemoryStore();
+      if (this.memory.archive?.length) this.store.appendFacts(this.memory.archive);
+    }
   }
   private indexing?: Promise<void>;
 
   private async generate(opts: GenerateOptions): Promise<Turn> {
     await this.settle();
     await this.refreshRecall();
+    this.refreshPage();
     const res = await this.provider.generate(this.buildMessages(), {
       model: this.model,
       temperature: this.temperature,
@@ -225,6 +254,7 @@ export class ChatSession {
   /** Drop anything the provider keeps ready for this session. Call when the conversation ends. */
   close(): void {
     this.provider.dispose?.();
+    if (this.ownStore) this.store?.close();
   }
 
   /**
@@ -277,6 +307,7 @@ export class ChatSession {
   private async *generateStream(opts: GenerateOptions): AsyncGenerator<string, Turn> {
     await this.settle();
     await this.refreshRecall();
+    this.refreshPage();
     let done: Parameters<NonNullable<GenerateOptions["onDone"]>>[0] | undefined;
     // With a filter on, the prefix up to the end of the first spoken line is held back so the
     // filter can edit it before the user sees it; the rest streams through untouched.
@@ -346,8 +377,14 @@ export class ChatSession {
 
   private async maybeConsolidate(): Promise<void> {
     if (!this.memoryManager.needsConsolidation(this.turns, this.memory)) return;
+    const before = this.memory.archive?.length ?? 0;
     this.memory = await this.memoryManager.consolidate(this.card, this.lang, this.turns, this.memory);
     if (this.recall && this.memory.archive?.length) await this.recall.index(this.memory.archive); // embeds new entries, off the user's path
+    if (this.store) {
+      const fresh = (this.memory.archive ?? []).slice(before);
+      if (fresh.length) this.store.appendFacts(fresh);
+      this.store.saveLedger(this.memory.coveredUpTo, this.memory);
+    }
     const u = this.memoryManager.lastUsage;
     if (u) {
       this.memoryUsage.promptTokens += u.promptTokens;
@@ -367,7 +404,38 @@ export class ChatSession {
     this.recalled = last && archive.length ? await this.recall.query(last.content, archive, this.memory.facts) : [];
   }
 
+  /**
+   * The page to show for the reply being generated (docs/13): the user named a proper noun the
+   * store knows and neither the summary nor the fact list carries. Of several, the one unmentioned
+   * longest, since that is the one the ledger most likely let go. Mechanical on every step; what
+   * counted as a proper noun was the summariser's call.
+   */
+  private refreshPage(): void {
+    this.page = undefined;
+    if (!this.store || !this.pageOpts) return;
+    const last = [...this.turns].reverse().find((t) => t.role === "user");
+    if (!last) return;
+    const ledger = `${this.memory.summary}\n${this.memory.facts.map((f) => f.text).join("\n")}`;
+    const name = this.card.name[this.lang] ?? this.card.name.ko ?? this.card.id;
+    const hits = this.store.entitiesIn(last.content, {
+      ledger,
+      ignore: [name, this.persona.name],
+      ...(this.pageOpts.maxShare !== undefined ? { maxShare: this.pageOpts.maxShare } : {}),
+      ...(this.pageOpts.minFacts !== undefined ? { minFacts: this.pageOpts.minFacts } : {}),
+    });
+    if (!hits.length) return;
+    const pick = hits.reduce((a, b) => (b.lastTurn < a.lastTurn ? b : a));
+    const all = this.store.entityPage(pick.name);
+    const max = this.pageOpts.maxLines ?? 8;
+    // Over the limit: the first line (how it began) and the latest ones.
+    const facts = all.length <= max ? all : [all[0]!, ...all.slice(-(max - 1))];
+    this.page = { entity: pick.name, facts };
+  }
+
   private recalledMeta(): Pick<NonNullable<Turn["meta"]>, "recalled"> {
+    if (this.page) {
+      return { recalled: this.page.facts.map((f) => ({ text: f.text, score: 0, why: "page" as const, turnTo: f.turnTo })) };
+    }
     return this.recalled.length
       ? { recalled: this.recalled.map((h) => ({ text: h.fact.text, score: Math.round(h.score * 1000) / 1000, why: h.why, turnTo: h.fact.turnTo })) }
       : {};
@@ -380,6 +448,7 @@ export class ChatSession {
     }
     const turn: Turn = { role, content, index: this.turns.length, ts: Date.now(), meta };
     this.turns.push(turn);
+    this.store?.appendTurns([turn]);
     return turn;
   }
 }

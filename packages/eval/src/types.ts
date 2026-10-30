@@ -68,13 +68,18 @@ export interface Arm {
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in
    * context instead of a summary.
    */
-  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4"; maxFacts?: number };
+  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4"; maxFacts?: number; maxFactChars?: number };
   /**
    * Recall from the fact archive before each reply (docs/12; needs memory rules v4). `embedder`
    * "local" = multilingual-e5-small through transformers.js on the CPU (default), "bigram" = hashed
    * character n-grams, no model (offline baseline and tests).
    */
   recall?: { k?: number; minScore?: number; minZ?: number; embedder?: "local" | "bigram" };
+  /**
+   * Entity-page recall (docs/13; needs memory rules v4): when the user names a proper noun the
+   * store knows and the ledger lacks, everything about it is shown as one page (up to `maxLines`).
+   */
+  pageRecall?: { maxLines?: number; maxShare?: number; minFacts?: number };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };
 }

@@ -5,6 +5,8 @@ import { ChatSession } from "../session.js";
 import { emptyMemory, type ArchivedFact } from "../types.js";
 import { MemoryManager } from "./manager.js";
 import { Recall, bigramEmbedder, nearDuplicate } from "./recall.js";
+import { MemoryStore } from "./store.js";
+import { cutToBudget } from "./manager.js";
 
 const cards = loadAllCharacters();
 
@@ -123,5 +125,57 @@ describe("recall (docs/12)", () => {
     expect(prompt[0]).not.toContain("older entries"); // the static system prompt is untouched
     expect(turn.meta?.recalled?.[0]).toMatchObject({ why: "entity", turnTo: 20 });
     expect(turn.meta?.recalled?.[0]?.text).toContain("보리");
+  });
+
+  it("page recall (docs/13) shows everything about a proper noun the user names and MEMORY lacks, and nothing otherwise", async () => {
+    let prompt: string[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      defaultModel: "fake-1",
+      async generate(messages) {
+        prompt = messages.map((m) => `${m.role}/${m.kind ?? "-"}: ${m.content}`);
+        return { text: '"보리요."', model: "fake-1", latencyMs: 1 };
+      },
+      async *stream() {
+        yield '"보리요."';
+      },
+    };
+    const haru = cards.find((c) => c.id === "haru")!;
+    const store = new MemoryStore();
+    store.appendFacts([
+      ...archive,
+      { text: "보리는 하늘 동물병원에 다닌다", source: "user", turnFrom: 400, turnTo: 410, entities: ["보리", "하늘 동물병원"] },
+    ]);
+    const s = new ChatSession({ card: haru, lang: "ko", provider, promptVersion: "v13-structured", memory: { enabled: false }, pageRecall: { store, maxLines: 8 } });
+    // 보리 is in the store and not in MEMORY: the page is shown, oldest first, and recorded on the reply.
+    const turn = await s.send("\"보리 기억하세요?\"");
+    const ctx = prompt.find((p) => p.startsWith("system/context"));
+    expect(ctx).toContain("everything about 보리");
+    expect(ctx).toMatch(/\[about \d+ exchanges ago\] .*고양이[\s\S]*하늘 동물병원/);
+    expect(prompt[0]).not.toContain("everything about");
+    expect(turn.meta?.recalled?.map((r) => r.why)).toEqual(["page", "page"]);
+    // Now the ledger carries 보리: nothing is shown.
+    s.memory = { ...s.memory, facts: [{ text: "민수는 고양이 보리를 키운다", source: "user" }] };
+    await s.send("\"보리는 잘 지내요.\"");
+    expect(prompt.find((p) => p.startsWith("system/context"))).toBeUndefined();
+    // A message naming nothing the store knows: nothing is shown.
+    s.memory = { ...s.memory, facts: [] };
+    await s.send("\"오늘 날씨가 좋네요.\"");
+    expect(prompt.find((p) => p.startsWith("system/context"))).toBeUndefined();
+    // Two unmentioned nouns: the page is the one unmentioned longest (성수동, last at turn 30, over 보리 at 410).
+    await s.send("\"성수동이랑 보리 얘기요.\"");
+    expect(prompt.find((p) => p.startsWith("system/context"))).toContain("everything about 성수동");
+    s.close();
+  });
+
+  it("the ledger's character budget cuts the list where the budget ends, in the summariser's order (docs/13)", () => {
+    const facts = [
+      { text: "민수는 고양이 보리를 키운다", source: "user" as const },
+      { text: "민수는 성수동에 산다", source: "user" as const },
+      { text: "하루는 6시 반에 연다", source: "self" as const },
+    ];
+    expect(cutToBudget(facts, 1000)).toHaveLength(3);
+    expect(cutToBudget(facts, facts[0]!.text.length + facts[1]!.text.length)).toHaveLength(2);
+    expect(cutToBudget(facts, 5)).toHaveLength(0);
   });
 });

@@ -151,6 +151,7 @@ export async function runConversation(
     memory: { model: mem.model, ...(arm.memory ?? {}) },
     filters: arm.filters,
     ...(arm.recall ? { recall: { ...arm.recall, embedder: embedderFor(arm.recall.embedder) } } : {}),
+    ...(arm.pageRecall ? { pageRecall: arm.pageRecall } : {}),
   });
 
   let user: UserSource;

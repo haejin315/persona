@@ -12,6 +12,7 @@ import {
   type Turn,
   type UserPersona,
 } from "../types.js";
+import type { StoredFact } from "../memory/store.js";
 
 export interface BuildContext {
   card: CharacterCard;
@@ -29,6 +30,11 @@ export interface BuildContext {
    * stay untouched. Absent = prompt unchanged.
    */
   recalled?: ArchivedFact[];
+  /**
+   * Everything the store knows about one proper noun the user just named and MEMORY lacks (docs/13):
+   * shown as one page, oldest first, in a per-turn context message like `recalled`.
+   */
+  page?: { entity: string; facts: StoredFact[] };
   /** Transcript turn count now, so each recalled entry can say how long ago it was said. */
   now?: number;
 }
@@ -225,7 +231,7 @@ A paragraph in MEMORY that starts with [days a-b] is a condensed record of those
 `;
 
 function buildV2(
-  { card, lang, memory, recent, persona, world, recalled, now }: BuildContext,
+  { card, lang, memory, recent, persona, world, recalled, page, now }: BuildContext,
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
@@ -322,15 +328,25 @@ ${STRICT_SAFETY_BLOCK}`
 
     // Fill once more over the whole prompt so no card field can leak a raw {{user}}.
     const messages: ChatMessage[] = [{ role: "system", content: f(system) }];
+    // An archive entry speaks from its own moment ("내일부터", "다다음 주 토요일"); shown bare, the
+    // character took 1000-turn-old plans as current (docs/12 result 2). Each line says how old it is.
+    const age = (x: ArchivedFact) => (now === undefined ? "" : `[about ${Math.max(1, Math.round((now - x.turnTo) / 2))} exchanges ago] `);
     if (recalled?.length) {
-      // An archive entry speaks from its own moment ("내일부터", "다다음 주 토요일"); shown bare, the
-      // character took 1000-turn-old plans as current (docs/12 result 2). Each line says how old it is.
-      const age = (x: ArchivedFact) => (now === undefined ? "" : `[about ${Math.max(1, Math.round((now - x.turnTo) / 2))} exchanges ago] `);
       messages.push({
         role: "system",
         kind: "context",
         content: f(`# MEMORY, older entries (facts from earlier in this relationship that fit what ${persona.name} just said; as true as MEMORY, but from the time they were said - each is marked with how long ago that was, and "tomorrow" or "next week" inside one counts from then, not from now; if one clashes with MEMORY above, MEMORY is current and this is how it was before)
 ${bullet(recalled.map((x) => age(x) + renderFact(x, persona.name, variety >= 12, world?.day)))}`),
+      });
+    }
+    if (page?.facts.length) {
+      // One page about one proper noun (docs/13): the user named it and MEMORY does not carry it.
+      // Scattered top-k hits made the character argue (docs/12 result 3); a page reads as what it is.
+      messages.push({
+        role: "system",
+        kind: "context",
+        content: f(`# MEMORY, everything about ${page.entity} (${persona.name} just named ${page.entity} and MEMORY above does not carry it; this is all you know about it, oldest first, each line marked with how long ago it was said - "tomorrow" or "next week" inside one counts from then, not from now; a line marked "since changed" was true then and a later line replaced it; if anything here clashes with MEMORY above, MEMORY is current)
+${bullet(page.facts.map((x) => age(x) + (x.status === "superseded" ? "[since changed] " : "") + renderFact(x, persona.name, variety >= 12, world?.day)))}`),
       });
     }
     if (splitContext) {

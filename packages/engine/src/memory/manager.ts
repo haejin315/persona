@@ -27,6 +27,13 @@ export interface MemoryConfig {
    * stated once with its proper nouns tagged, appended to `memory.archive` uncapped.
    */
   maxFacts?: number;
+  /**
+   * Character budget for the whole fact list (docs/13). The count cap alone did not bound the
+   * prompt: at 1000 turns the 25 slots held their facts by growing into paragraphs (374 → 9,041
+   * chars, +75% prompt tokens). With a budget the summariser orders by importance and the list is
+   * cut where the budget ends; what is cut stays in the archive for recall. Absent = count cap only.
+   */
+  maxFactChars?: number;
 }
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
@@ -104,6 +111,11 @@ export class MemoryManager {
         : []),
       "}",
       `Keep facts from existing memory unless contradicted. Max ${maxFacts} facts; merge duplicates.`,
+      ...(this.cfg.maxFactChars
+        ? [
+            `The fact list is also capped at ${this.cfg.maxFactChars} characters in total and is cut there: one short line per fact, no paragraphs, most important first (names, promises, what is current now). What falls off the end is not lost - it stays in the archive.`,
+          ]
+        : []),
       `Attribute every fact to the right person and start it with their name (the user or ${name}). What the user tells ${name} about themselves is a fact about the USER, even when ${name} reacts to it.`,
       ...(this.cfg.rules === "v2" || v3
         ? [
@@ -140,9 +152,10 @@ export class MemoryManager {
     const parsed = safeJson(res.text);
     if (!parsed) return { ...memory, coveredUpTo: toExclusive - 1 };
 
-    const facts: Fact[] = Array.isArray(parsed.facts)
+    let facts: Fact[] = Array.isArray(parsed.facts)
       ? (parsed.facts as unknown[]).map(toFact).filter((f): f is Fact => !!f).slice(0, maxFacts)
       : memory.facts;
+    if (this.cfg.maxFactChars) facts = cutToBudget(facts, this.cfg.maxFactChars);
     const known = new Set((memory.archive ?? []).map((f) => f.text));
     const fresh: ArchivedFact[] = v4 && Array.isArray(parsed.new_facts)
       ? (parsed.new_facts as unknown[]).flatMap((raw) => {
@@ -171,6 +184,18 @@ export class MemoryManager {
       ...(archive ? { archive } : {}),
     };
   }
+}
+
+/** Keep facts in the summariser's order while their total length fits the budget (docs/13). */
+export function cutToBudget(facts: Fact[], budget: number): Fact[] {
+  const out: Fact[] = [];
+  let used = 0;
+  for (const f of facts) {
+    if (used + f.text.length > budget) break;
+    out.push(f);
+    used += f.text.length;
+  }
+  return out;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
