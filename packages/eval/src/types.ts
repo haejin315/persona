@@ -85,7 +85,19 @@ export interface Arm {
    * docker-compose.yml): transcript chunks + facts in the vector database, fact triples in the
    * graph; the user's message seeds the graph and queries the vectors before each reply.
    */
-  graphRag?: { chunkK?: number; factK?: number; selfK?: number; hops?: number; edgeLimit?: number; edgeCandidates?: number; minScore?: number; tokenLinking?: boolean };
+  graphRag?: {
+    chunkK?: number;
+    factK?: number;
+    selfK?: number;
+    hops?: number;
+    edgeLimit?: number;
+    edgeCandidates?: number;
+    minScore?: number;
+    tokenLinking?: boolean;
+    maxTokenShare?: number;
+    /** transformers.js model id for the local embedder (default Xenova/multilingual-e5-small). */
+    embedModel?: string;
+  };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };
 }

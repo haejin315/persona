@@ -39,8 +39,10 @@ export interface GraphRagOptions {
   /** Edges shown per reply (default 12). 0 = the graph is not read. */
   edgeLimit?: number;
   /**
-   * Edges read from the graph before ranking by similarity to the message (default 60). At most
+   * Edges read from the graph before ranking by similarity to the message (default 300). At most
    * `edgeLimit` of them are shown. 0 = no ranking: the graph's own order (depth, then recency).
+   * The graph cuts the candidates by depth and recency, so a small pool loses old edges when many
+   * nodes seed (round 2 at 60).
    */
   edgeCandidates?: number;
   /** Vector hits below this cosine are dropped (default 0, keep all). */
@@ -56,6 +58,11 @@ export interface GraphRagOptions {
    * name (default true): "본가" wakes "대전 본가".
    */
   tokenLinking?: boolean;
+  /**
+   * A token links only if it occurs in at most this share of all node names (default 0.02, floor
+   * 3 names): a token shared by many names (얘기, 컵) is not a name.
+   */
+  maxTokenShare?: number;
   chunking?: ChunkOptions;
 }
 
@@ -120,8 +127,15 @@ export class GraphRag {
     const totalEdges = nodes.reduce((a, n) => a + n.degree, 0) / 2;
     const hub = Math.max(10, (this.opts.maxHubShare ?? 0.1) * totalEdges);
     const tokens = this.opts.tokenLinking ?? true;
+    // A token links only when it is discriminative: present in few node names. 얘기 (in 만화 얘기,
+    // 판교 얘기, 보리 얘기 …) or 손잡이 would otherwise seed on nearly every message (round 2: 37% of
+    // all seeds came from such tokens). Statistics over the graph's own names, not a word list.
+    const tokenCount = new Map<string, number>();
+    for (const n of nodes) for (const tok of new Set(n.name.split(/\s+/))) tokenCount.set(tok, (tokenCount.get(tok) ?? 0) + 1);
+    const maxTokenNames = Math.max(3, (this.opts.maxTokenShare ?? 0.02) * nodes.length);
     const named = (name: string) =>
-      message.includes(name) || (tokens && name.split(/\s+/).some((tok) => tok.length >= 2 && tok !== name && message.includes(tok)));
+      message.includes(name) ||
+      (tokens && name.split(/\s+/).some((tok) => tok.length >= 2 && tok !== name && (tokenCount.get(tok) ?? 0) <= maxTokenNames && message.includes(tok)));
     return {
       seeds: nodes.filter((n) => n.name.length >= 2 && !ignore.has(n.name) && n.degree <= hub && named(n.name)).map((n) => n.name),
       hubs: nodes.filter((n) => n.degree > hub || ignore.has(n.name)).map((n) => n.name),
@@ -136,7 +150,7 @@ export class GraphRag {
   async retrieve(message: string, o: { turnToMax?: number; ignore?: string[] } = {}): Promise<GraphRagResult> {
     const ignore = new Set((o.ignore ?? []).map((s) => s.replace(/\s*(씨|님)$/u, "")));
     const edgeLimit = this.opts.edgeLimit ?? 12;
-    const candidates = this.opts.edgeCandidates ?? 60;
+    const candidates = this.opts.edgeCandidates ?? 300;
     const { seeds, hubs } = edgeLimit > 0 ? await this.seeds(message, ignore) : { seeds: [], hubs: [] };
     const [candidateEdges, [qv]] = await Promise.all([
       seeds.length
