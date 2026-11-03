@@ -299,6 +299,22 @@ describe("memory manager", () => {
     expect(m.coveredUpTo).toBe(3); // turns 0..3 folded, 4..5 remain in window
   });
 
+  it("rules v8 keep the summariser's 'now' line, carry it when a round omits it, and show it with MEMORY (docs/14 6차)", async () => {
+    const reply = JSON.stringify({ summary: "s", facts: ["민수는 다다음 주 토요일에 이사한다"], relationship: { stage: "acquaintance", notes: [] }, now: "토요일 아침이고, 민수의 이사는 다다음 주라 아직 전이다.", new_facts: [] });
+    const mm = new MemoryManager(fake(reply), { windowTurns: 2, consolidateEvery: 1, rules: "v8" });
+    const m = await mm.consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    expect(m.now).toBe("토요일 아침이고, 민수의 이사는 다다음 주라 아직 전이다.");
+    const silent = new MemoryManager(fake(JSON.stringify({ summary: "s2", facts: [], relationship: { stage: "acquaintance", notes: [] } })), { windowTurns: 2, consolidateEvery: 1, rules: "v8" });
+    expect((await silent.consolidate(cards[0]!, "ko", turns(6), m)).now).toBe(m.now);
+    const v7 = new MemoryManager(fake(reply), { windowTurns: 2, consolidateEvery: 1, rules: "v7" });
+    expect((await v7.consolidate(cards[0]!, "ko", turns(6), emptyMemory())).now).toBeUndefined();
+    const s = new ChatSession({ card: cards[0]!, lang: "ko", provider: fake(), promptVersion: "v3-cached", persona });
+    s.memory = { ...m, coveredUpTo: -1 };
+    const ctx = s.buildMessages().find((x) => x.kind === "context")!;
+    expect(ctx.content).toContain("Where things stand now");
+    expect(ctx.content).toContain("이사는 다다음 주라 아직 전이다");
+  });
+
   it("rules v3 keeps the source the model gives each fact and drops malformed ones", async () => {
     const reply = JSON.stringify({
       summary: "s",

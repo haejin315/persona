@@ -229,6 +229,12 @@ export interface MemoryState {
   coveredUpTo: number;
   /** Every fact ever extracted, uncapped (memory rules v4); absent on older recordings. */
   archive?: ArchivedFact[];
+  /**
+   * Where the story stands as of the last consolidation (memory rules v8, docs/14 6차): the day if
+   * the user named it, what has just happened, what is ahead. The summariser's judgement, rewritten
+   * every time; shown with MEMORY and at the head of the retrieved block.
+   */
+  now?: string;
 }
 
 export const emptyMemory = (): MemoryState => ({

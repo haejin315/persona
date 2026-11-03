@@ -60,6 +60,15 @@ export interface GraphRagOptions {
    * 6th by its best sentence).
    */
   query?: "message" | "speech" | "sentences";
+  /**
+   * How the per-sentence searches combine (round 6). "max": a point's score is its best over the
+   * sentences and the list is ranked by score - a filler sentence ("내일 또 올게요") can then outrank
+   * the sentence that carries the question (t996 in the v7 arm: 민수 —온다→ 카페 first, the title edge
+   * 19th). "interleave": a point's rank is its best rank over the sentences, so every sentence gets
+   * its first hit before any sentence gets its second, and each sentence's first edge brings its
+   * siblings.
+   */
+  fusion?: "max" | "interleave";
   /** Vector hits below this cosine are dropped (default 0, keep all). */
   minScore?: number;
   /**
@@ -191,54 +200,79 @@ export class GraphRag {
         : Promise.resolve([] as GraphEdge[]),
       this.opts.embedder.embed(queries, "query"),
     ]);
-    // One search per query vector; a point's score is its best over them (max fusion).
-    const search = async (collection: string, opts: { limit: number; filter?: VectorFilter }) => {
-      const lists = await Promise.all(qvs.map((qv) => this.opts.vectors.search(collection, qv, opts)));
-      if (lists.length === 1) return lists[0]!;
-      const best = new Map<string, VectorHitRow>();
-      for (const hits of lists) for (const h of hits) if ((best.get(h.id)?.score ?? -Infinity) < h.score) best.set(h.id, h);
-      return [...best.values()].sort((a, b) => b.score - a.score).slice(0, opts.limit);
+    // One search per query vector. A point's score is its best over them; "max" ranks by that
+    // score, "interleave" by the point's best rank over the sentences (round 6).
+    const fusion = this.opts.fusion ?? "max";
+    const fuse = (lists: VectorHitRow[][], limit: number): VectorHitRow[] => {
+      if (lists.length === 1) return lists[0]!.slice(0, limit);
+      const row = new Map<string, VectorHitRow>();
+      const rank = new Map<string, number>();
+      for (const hits of lists)
+        hits.forEach((h, i) => {
+          if ((row.get(h.id)?.score ?? -Infinity) < h.score) row.set(h.id, h);
+          if ((rank.get(h.id) ?? Infinity) > i) rank.set(h.id, i);
+        });
+      const rows = [...row.values()];
+      rows.sort(fusion === "interleave" ? (a, b) => rank.get(a.id)! - rank.get(b.id)! || b.score - a.score : (a, b) => b.score - a.score);
+      return rows.slice(0, limit);
     };
+    const searchLists = (collection: string, opts: { limit: number; filter?: VectorFilter }) => Promise.all(qvs.map((qv) => this.opts.vectors.search(collection, qv, opts)));
+    const search = async (collection: string, opts: { limit: number; filter?: VectorFilter }) => fuse(await searchLists(collection, opts), opts.limit);
     const filter = o.turnToMax !== undefined ? { turnToMax: o.turnToMax } : {};
     const selfK = this.opts.selfK ?? 2;
     const factK = this.opts.factK ?? 5;
-    const [chunkHits, userFactHits, selfFactHits, edgeScores] = await Promise.all([
+    const [chunkHits, userFactHits, selfFactHits, edgeLists] = await Promise.all([
       search(this.chunksCollection, { limit: this.opts.chunkK ?? 3, filter }),
       selfK < 0 ? search(this.factsCollection, { limit: factK, filter }) : search(this.factsCollection, { limit: factK, filter: { ...filter, self: false } }),
       selfK > 0 ? search(this.factsCollection, { limit: selfK, filter: { ...filter, self: true } }) : Promise.resolve([] as VectorHitRow[]),
       candidates > 0 && candidateEdges.length > 0
-        ? search(this.factsCollection, { limit: candidateEdges.length, filter: { ids: [...new Set(candidateEdges.map(factId))] } })
-        : Promise.resolve([] as VectorHitRow[]),
+        ? searchLists(this.factsCollection, { limit: candidateEdges.length, filter: { ids: [...new Set(candidateEdges.map(factId))] } })
+        : Promise.resolve([] as VectorHitRow[][]),
     ]);
+    const edgeScores = fuse(edgeLists, candidateEdges.length);
     // Rank the neighbourhood by how close each edge's fact is to the message; edges whose fact the
     // vector store does not hold keep the graph's order after the scored ones.
     let edges = candidateEdges;
     if (candidates > 0 && candidateEdges.length) {
       const score = new Map(edgeScores.map((h) => [h.id, h.score]));
+      const order = new Map(edgeScores.map((h, i) => [h.id, i]));
+      const at = (e: GraphEdge) => order.get(factId(e)) ?? Infinity;
       edges = candidateEdges
         .map((e) => ({ ...e, score: score.get(factId(e)) }))
-        .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.depth - b.depth || b.turnTo - a.turnTo);
+        .sort((a, b) => (at(a) === at(b) ? 0 : at(a) < at(b) ? -1 : 1) || a.depth - b.depth || b.turnTo - a.turnTo);
     }
     // One line per triple: the summariser restates a fact every time it comes up (민수 —그렸다→
     // 달빛 고양이 twice, 만화 원서 twice), and each restatement took one of the edgeLimit slots
     // (round 3, t996). The best-ranked instance stays.
+    const key = (e: GraphEdge) => `${e.subject}\u0000${e.relation}\u0000${e.object}\u0000${e.current}`;
     const seen = new Set<string>();
     edges = edges.filter((e) => {
-      const k = `${e.subject}\u0000${e.relation}\u0000${e.object}\u0000${e.current}`;
+      const k = key(e);
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
     });
-    // The top edge's siblings (same subject and relation) come next to it, ahead of the cut: what
-    // the message is about is often one hop beside what it says.
+    // Each lead edge's siblings (same subject and relation) come next to it, ahead of the cut: what
+    // the message is about is often one hop beside what it says. With max fusion the lead is the
+    // top edge; with interleave, every sentence's first edge leads (round 6).
     const expand = this.opts.expandTop ?? 2;
     if (expand > 0 && edges.length > 1) {
-      const top = edges[0]!;
-      const siblings = edges.slice(1).filter((e) => e.subject === top.subject && e.relation === top.relation).slice(0, expand);
-      if (siblings.length) {
-        const rest = edges.slice(1).filter((e) => !siblings.includes(e));
-        edges = [top, ...siblings, ...rest];
+      const headIds = new Set(fusion === "interleave" ? edgeLists.map((l) => l[0]?.id).filter((id): id is string => !!id) : []);
+      const headKeys = new Set(candidateEdges.filter((e) => headIds.has(factId(e))).map(key));
+      const leads = new Set<(typeof edges)[number]>(fusion === "interleave" ? edges.filter((e) => headKeys.has(key(e))) : [edges[0]!]);
+      const placed = new Set<(typeof edges)[number]>();
+      const out: typeof edges = [];
+      for (const e of edges) {
+        if (placed.has(e)) continue;
+        out.push(e);
+        placed.add(e);
+        if (!leads.has(e)) continue;
+        for (const s of edges.filter((x) => !placed.has(x) && x.subject === e.subject && x.relation === e.relation).slice(0, expand)) {
+          out.push(s);
+          placed.add(s);
+        }
       }
+      edges = out;
     }
     edges = edges.slice(0, edgeLimit);
     const min = this.opts.minScore ?? 0;

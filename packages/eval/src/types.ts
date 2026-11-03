@@ -68,7 +68,7 @@ export interface Arm {
    * window-only character; `{ enabled: false, windowTurns: 400 }` puts the whole transcript in
    * context instead of a summary.
    */
-  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7"; maxFacts?: number; maxFactChars?: number };
+  memory?: { windowTurns?: number; consolidateEvery?: number; enabled?: boolean; rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7" | "v8"; maxFacts?: number; maxFactChars?: number };
   /**
    * Recall from the fact archive before each reply (docs/12; needs memory rules v4). `embedder`
    * "local" = multilingual-e5-small through transformers.js on the CPU (default), "bigram" = hashed
@@ -104,6 +104,7 @@ export interface Arm {
     /** Round 5 (docs/14): what is embedded as the query, and how many of the character's own last replies also seed the graph. */
     query?: "message" | "speech" | "sentences";
     carry?: number;
+    fusion?: "max" | "interleave";
   };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };

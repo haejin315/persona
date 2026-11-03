@@ -307,7 +307,7 @@ ${world ? NOW_BLOCK(world, persona.name, memory.facts.some((x) => x.about === "u
     ? ""
     : `# MEMORY (what has happened so far - treat as true)
 ${memory.summary || "(the conversation has just begun)"}
-Facts to remember:
+${memory.now ? `Where things stand now (as of what you last took in; the conversation below is more recent and wins): ${memory.now}\n` : ""}Facts to remember:
 ${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12, world?.day)))}
 
 `
@@ -363,7 +363,7 @@ ${memory.relationship.stage}${memory.relationship.notes.length ? `\n${bullet(mem
 
 # MEMORY (what has happened so far)
 ${memory.summary || "(the conversation has just begun)"}
-Facts to remember:
+${memory.now ? `Where things stand now (as of what you last took in; the conversation below is more recent and wins): ${memory.now}\n` : ""}Facts to remember:
 ${bullet(memory.facts.map((x) => renderFact(x, persona.name, variety >= 12, world?.day)))}${
         recentBlock
           ? `

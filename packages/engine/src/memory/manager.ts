@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7";
+  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7" | "v8";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -89,7 +89,8 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
-    const v7 = this.cfg.rules === "v7";
+    const v8 = this.cfg.rules === "v8";
+    const v7 = this.cfg.rules === "v7" || v8;
     const v6 = this.cfg.rules === "v6" || v7;
     const v5 = this.cfg.rules === "v5" || v6;
     const v3 = this.cfg.rules === "v3" || this.cfg.rules === "v4" || v5;
@@ -107,6 +108,11 @@ export class MemoryManager {
         ? `  "facts": [{"text": "short standalone fact worth remembering verbatim: names, promises, preferences, events, nicknames", "source": "user | self | witnessed | told | rumor", "by": "who told ${name} - only when source is told"}],`
         : '  "facts": ["short standalone facts worth remembering verbatim: names, promises, preferences, events, nicknames"],',
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
+      ...(v8
+        ? [
+            `  "now": "where things stand at the end of the NEW TRANSCRIPT, one or two sentences in ${LANG_NAME[lang]}: the day or time of day if the lines say it, what the user is in the middle of, which once-planned things have already happened, what is still ahead - written fresh from the latest lines every time, never carried forward"`,
+          ]
+        : []),
       ...(v4
         ? [
             `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]${v5 ? `, "triple": {"subject": "one entity or concept", "relation": "short verb phrase", "object": "one entity or concept"${v6 ? ', "replaces": "true only when this changes what held before about the same subject and relation"' : ""}}` : ""}}]`,
@@ -148,6 +154,11 @@ export class MemoryManager {
       ...(v7
         ? [
             `A plan becoming the event is also a replacement: when the user reports that something planned or awaited has now happened (the wedding attended, the move done, the result received, the trip taken), the new fact gets "replaces": true with the same subject and object as the plan (민수 다녀왔다 태호 결혼식 replaces 민수 간다 태호 결혼식) - the plan is over, and the character must not treat it as still ahead.`,
+          ]
+        : []),
+      ...(v8
+        ? [
+            `"now" is the present, not the record: the summary and facts say what was said, "now" says where the story stands as the latest lines leave it - the day if the user named it (the user said it is Saturday, so it is Saturday and a Saturday promise is for today, not later), what has just happened, what comes next. A plan whose day has come or gone is written as done or missed, never as still upcoming; a date already passed is marked passed. Where the lines do not say, write what they imply and nothing more.`,
           ]
         : []),
     ].join("\n");
@@ -210,6 +221,7 @@ export class MemoryManager {
       },
       coveredUpTo: toExclusive - 1,
       ...(archive ? { archive } : {}),
+      ...(v8 ? (typeof parsed.now === "string" && parsed.now.trim() ? { now: parsed.now.trim() } : memory.now ? { now: memory.now } : {}) : {}),
     };
   }
 }

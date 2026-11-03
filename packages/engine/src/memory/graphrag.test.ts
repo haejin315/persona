@@ -246,6 +246,42 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(edges.find((e) => e.relation === "좋아한다")!.current).toBe(true);
   });
 
+  it("round 6: interleave fusion gives every spoken sentence its first edge, each with its siblings, before any sentence's second", async () => {
+    const vectors = new MemoryVectorIndex();
+    const graph = new MemoryGraph();
+    const embedder = bigramEmbedder(256);
+    const rows: ArchivedFact[] = [
+      { text: "민수는 어릴 때 만화를 그렸다", source: "user", turnFrom: 1, turnTo: 1, triple: { subject: "민수", relation: "그렸다", object: "만화" } },
+      { text: "민수는 어릴 때 '달빛 고양이'라는 만화를 그렸다", source: "user", turnFrom: 2, turnTo: 2, triple: { subject: "민수", relation: "그렸다", object: "달빛 고양이" } },
+      { text: "민수는 어릴 때 만화풍 그림도 그렸다", source: "user", turnFrom: 3, turnTo: 3, triple: { subject: "민수", relation: "그렸다", object: "만화풍 그림" } },
+      { text: "보리는 하늘 동물병원에 다닌다", source: "user", turnFrom: 4, turnTo: 4, triple: { subject: "보리", relation: "다닌다", object: "하늘 동물병원" } },
+      { text: "보리는 하늘 동물병원 처방 사료를 먹는다", source: "user", turnFrom: 5, turnTo: 5, triple: { subject: "보리", relation: "먹는다", object: "처방 사료" } },
+      { text: "하늘 동물병원은 큰길 쪽에 있다", source: "user", turnFrom: 6, turnTo: 6, triple: { subject: "하늘 동물병원", relation: "있다", object: "큰길" } },
+    ];
+    const message = '"보리가 다니는 하늘 동물병원이요." "제가 어릴 때 만화를 그린 적이 있어요."';
+    const mk = (fusion: "max" | "interleave") => new GraphRag({ ns: "f6", embedder, vectors, graph, query: "sentences", fusion, factK: 2, selfK: 0, edgeLimit: 12, edgeCandidates: 300, expandTop: 2 });
+    await mk("max").ingestFacts(rows);
+    const sentences = speechSentences(message);
+    expect(sentences).toHaveLength(2);
+    // Each sentence's nearest fact, measured directly.
+    const heads = await Promise.all(sentences.map(async (s) => { const [qv] = await embedder.embed([s], "query"); const [h] = await vectors.search("f6-facts", qv!, { limit: 1 }); return String(h!.payload.text); }));
+    expect(heads[0]).not.toBe(heads[1]);
+    const r = await mk("interleave").retrieve(message, { ignore: ["하루", "민수"] });
+    const texts = r.edges.map((e) => e.text);
+    // The first edge is one sentence's head; its siblings (same subject and relation, at most 2) follow; then the other head.
+    expect(heads).toContain(texts[0]);
+    const first = r.edges[0]!;
+    let k = 1;
+    while (k < r.edges.length && r.edges[k]!.subject === first.subject && r.edges[k]!.relation === first.relation) k++;
+    expect(k - 1).toBeLessThanOrEqual(2);
+    expect(texts[k]).toBe(heads.find((h) => h !== texts[0]));
+    // Facts too: with factK 2, one from each sentence rather than two from the nearer one.
+    expect(r.facts.map((f) => f.text).sort()).toEqual([...heads].sort());
+    // Max fusion keeps its single lead: the first edge is the best-scoring fact over both sentences.
+    const m = await mk("max").retrieve(message, { ignore: ["하루", "민수"] });
+    expect(m.edges.every((e, i) => i === 0 || (e.score ?? 0) <= (m.edges[0]!.score ?? 0))).toBe(true);
+  });
+
   it("a session with graphRag shows the retrieved block as a context message and records the retrieval on the reply", async () => {
     let prompt: string[] = [];
     const provider: LLMProvider = {

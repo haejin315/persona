@@ -513,7 +513,11 @@ export class ChatSession {
     const context = this.knowledgeCarry > 0 ? this.turns.filter((t) => t.role === "character").slice(-this.knowledgeCarry).map((t) => t.content) : undefined;
     const r = await this.graphRag.retrieve(last.content, { turnToMax: this.memory.coveredUpTo, ignore: [name, this.persona.name], ...(context?.length ? { context } : {}) });
     const ms = Math.round(performance.now() - t0);
-    const block = renderGraphRag(r, this.turns.length, this.persona.name, { character: name, style: this.knowledgeRender });
+    const rendered = renderGraphRag(r, this.turns.length, this.persona.name, { character: name, style: this.knowledgeRender });
+    // The present as the summariser last read it (memory rules v8) heads the block, next to the
+    // message - where round 4 showed the block is actually read.
+    const now = this.memory.now ? `## WHERE THINGS STAND (as of what you last took in; the last messages are more recent and win)\n${this.memory.now}` : "";
+    const block = [now, rendered].filter(Boolean).join("\n\n");
     this.knowledge = block || undefined;
     this.retrievalMeta = {
       seeds: r.seeds,
