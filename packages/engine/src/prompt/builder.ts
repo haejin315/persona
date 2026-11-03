@@ -37,6 +37,11 @@ export interface BuildContext {
   page?: { entity: string; facts: StoredFact[] };
   /** Graph RAG block (docs/14), already rendered; shown as a per-turn context message. */
   knowledge?: string;
+  /**
+   * Where the Graph RAG block goes: "head" (default) with the other per-turn context ahead of the
+   * transcript, "tail" after the transcript, next to the message it was retrieved for (round 4).
+   */
+  knowledgeAt?: "head" | "tail";
   /** Transcript turn count now, so each recalled entry can say how long ago it was said. */
   now?: number;
 }
@@ -233,7 +238,7 @@ A paragraph in MEMORY that starts with [days a-b] is a condensed record of those
 `;
 
 function buildV2(
-  { card, lang, memory, recent, persona, world, recalled, page, knowledge, now }: BuildContext,
+  { card, lang, memory, recent, persona, world, recalled, page, knowledge, knowledgeAt, now }: BuildContext,
   boundaries: BoundariesMode,
   variety: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 = 0,
   recentBlock = false,
@@ -351,7 +356,7 @@ ${bullet(recalled.map((x) => age(x) + renderFact(x, persona.name, variety >= 12,
 ${bullet(page.facts.map((x) => age(x) + (x.status === "superseded" ? "[since changed] " : "") + renderFact(x, persona.name, variety >= 12, world?.day)))}`),
       });
     }
-    if (knowledge) messages.push({ role: "system", kind: "context", content: f(knowledge) });
+    if (knowledge) messages.push({ role: "system", kind: knowledgeAt === "tail" ? "context-tail" : "context", content: f(knowledge) });
     if (splitContext) {
       const context = `# RELATIONSHIP STAGE
 ${memory.relationship.stage}${memory.relationship.notes.length ? `\n${bullet(memory.relationship.notes)}` : ""}

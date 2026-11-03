@@ -50,7 +50,13 @@ export interface SessionOptions {
    * each reply the user's message seeds the graph and queries the vectors, and the result is one
    * context block. `ns` is the conversation's namespace in both stores.
    */
-  graphRag?: Partial<Omit<GraphRagOptions, "ns">> & { ns: string };
+  graphRag?: Partial<Omit<GraphRagOptions, "ns">> & {
+    ns: string;
+    /** Where the block goes in the prompt: ahead of the transcript (default) or after it, next to the message (round 4). */
+    at?: "head" | "tail";
+    /** Block layout: "v1" (round 1-3) or "v2" (round 4: facts about the user apart from the character's own past words, with reading rules). */
+    render?: "v1" | "v2";
+  };
   model?: string;
   temperature?: number;
   /** Passed to the provider on every reply; "off" answers without extended thinking where the model allows (docs/11). */
@@ -106,6 +112,8 @@ export class ChatSession {
   private graphRag?: GraphRag;
   /** The rendered Graph RAG block for the reply being generated (docs/14). */
   knowledge?: string;
+  private knowledgeAt: "head" | "tail" = "head";
+  private knowledgeRender: "v1" | "v2" = "v1";
   private retrievalMeta?: NonNullable<Turn["meta"]>["retrieval"] & { lines: NonNullable<NonNullable<Turn["meta"]>["recalled"]> };
   private ingestedUpTo = -1;
   private rebuilding?: Promise<void>;
@@ -146,7 +154,9 @@ export class ChatSession {
       this.ownStore = !store;
     }
     if (opts.graphRag) {
-      const g = opts.graphRag;
+      const { at, render, ...g } = opts.graphRag;
+      this.knowledgeAt = at ?? "head";
+      this.knowledgeRender = render ?? "v1";
       this.graphRag = new GraphRag({
         ...g,
         embedder: g.embedder ?? localEmbedder(),
@@ -182,7 +192,7 @@ export class ChatSession {
       ...(this.world ? { world: this.world } : {}),
       ...(this.recalled.length ? { recalled: this.recalled.map((h) => h.fact) } : {}),
       ...(this.page ? { page: this.page } : {}),
-      ...(this.knowledge ? { knowledge: this.knowledge } : {}),
+      ...(this.knowledge ? { knowledge: this.knowledge, knowledgeAt: this.knowledgeAt } : {}),
       ...(this.recalled.length || this.page ? { now: this.turns.length } : {}),
     });
   }
@@ -498,7 +508,7 @@ export class ChatSession {
     const t0 = performance.now();
     const r = await this.graphRag.retrieve(last.content, { turnToMax: this.memory.coveredUpTo, ignore: [name, this.persona.name] });
     const ms = Math.round(performance.now() - t0);
-    const block = renderGraphRag(r, this.turns.length, this.persona.name);
+    const block = renderGraphRag(r, this.turns.length, this.persona.name, { character: name, style: this.knowledgeRender });
     this.knowledge = block || undefined;
     this.retrievalMeta = {
       seeds: r.seeds,

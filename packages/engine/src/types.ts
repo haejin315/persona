@@ -248,7 +248,12 @@ export interface ChatMessage {
    * caches the system prompt only when it is byte-identical, so one changing line there costs
    * the whole cache (measured: v3-recent cached 0 tokens vs 3,449 for v3).
    */
-  kind?: "context";
+  /**
+   * "context": per-turn state shown ahead of the transcript (MEMORY, recall). "context-tail": shown
+   * after the transcript, right before the reply is written (docs/14 round 4: the retrieved block
+   * next to the message it was retrieved for).
+   */
+  kind?: "context" | "context-tail";
 }
 
 /** A turn as it appears in a transcript or prompt: the day boundary, if any, ahead of the text. */

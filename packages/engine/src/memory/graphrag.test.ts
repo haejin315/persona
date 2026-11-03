@@ -138,6 +138,71 @@ describe("Graph RAG memory (docs/14)", () => {
     expect((await plain.retrieve("제 본가가 어디였죠", { ignore: ["하루", "민수"] })).seeds).toEqual([]);
   });
 
+  it("keeps the top edge's siblings next to it, and the v2 block separates the user's facts from the character's own words", async () => {
+    // The message is about drawing comics; the title is a sibling edge (same subject and relation)
+    // that cosine alone ranks below unrelated-but-wordier neighbours.
+    const g = new MemoryGraph();
+    const comics: ArchivedFact = { text: "민수는 어릴 때 만화를 그렸다", source: "user", turnFrom: 10, turnTo: 10, triple: { subject: "민수", relation: "그렸다", object: "만화" } };
+    const title: ArchivedFact = { text: "제목은 달빛 고양이였다", source: "user", turnFrom: 12, turnTo: 12, triple: { subject: "민수", relation: "그렸다", object: "달빛 고양이" } };
+    const noise: ArchivedFact[] = Array.from({ length: 6 }, (_, i) => ({
+      text: `민수는 어릴 때 만화 ${i}권을 헌책방에서 읽었다`,
+      source: "user",
+      turnFrom: 20 + i,
+      turnTo: 20 + i,
+      triple: { subject: "민수", relation: "읽었다", object: `만화 ${i}권` },
+    }));
+    const promise: ArchivedFact = { text: "하루는 토요일에 만화 얘기를 듣기로 했다", source: "self", turnFrom: 14, turnTo: 14, triple: { subject: "하루", relation: "듣기로 했다", object: "만화 얘기" } };
+    const vectors = new MemoryVectorIndex();
+    const embedder = bigramEmbedder(256);
+    const on = new GraphRag({ ns: "x", embedder, vectors, graph: g, edgeLimit: 3, expandTop: 2, factK: 2, selfK: 1 });
+    await on.ingestFacts([comics, title, ...noise, promise]);
+    const q = "제가 어릴 때 만화를 그린 적이 있어요";
+    const r = await on.retrieve(q, { ignore: ["하루", "민수"] });
+    expect(r.edges[0]!.object).toBe("만화");
+    expect(r.edges.slice(0, 3).some((e) => e.object === "달빛 고양이")).toBe(true);
+    const off = new GraphRag({ ns: "x", embedder, vectors, graph: g, edgeLimit: 3, expandTop: 0, factK: 2, selfK: 1 });
+    const r0 = await off.retrieve(q, { ignore: ["하루", "민수"] });
+    expect(r0.edges[0]!.object).toBe("만화");
+    // v2 block: the character's own edge and self fact sit under their own heading with the rule on past plans.
+    const hand = {
+      seeds: ["만화"],
+      edges: [
+        { subject: "민수", relation: "그렸다", object: "만화", text: comics.text, turnFrom: 10, turnTo: 10, current: true, depth: 1, score: 0.9 },
+        { subject: "하루", relation: "듣기로 했다", object: "만화 얘기", text: promise.text, turnFrom: 14, turnTo: 14, current: true, depth: 2, score: 0.8 },
+      ],
+      chunks: [],
+      facts: [
+        { text: title.text, turnFrom: 12, turnTo: 12, score: 0.8, self: false },
+        { text: promise.text, turnFrom: 14, turnTo: 14, score: 0.7, self: true },
+      ],
+    };
+    const block = renderGraphRag(hand, 100, "민수", { character: "하루", style: "v2" });
+    expect(block).toContain("# WHAT YOU REMEMBER ABOUT THIS");
+    expect(block).toContain("## ABOUT 민수");
+    expect(block).toContain("## WHAT YOU SAID OR PLANNED THEN");
+    expect(block.indexOf("하루 —듣기로 했다→ 만화 얘기")).toBeGreaterThan(block.indexOf("## WHAT YOU SAID OR PLANNED THEN"));
+    expect(block.indexOf("민수 —그렸다→ 만화")).toBeLessThan(block.indexOf("## WHAT YOU SAID OR PLANNED THEN"));
+    expect(renderGraphRag(hand, 100, "민수", { character: "하루", style: "v1" })).toContain("KNOWLEDGE GRAPH");
+  });
+
+  it("a tail-placed block is folded after the transcript, a head-placed one before it", async () => {
+    const { foldMessages } = await import("../providers/claudeCli.js");
+    const msgs = (kind: "context" | "context-tail") => [
+      { role: "system" as const, content: "SYS" },
+      { role: "system" as const, kind, content: "BLOCK" },
+      { role: "user" as const, content: "u1" },
+      { role: "assistant" as const, content: "a1" },
+      { role: "user" as const, content: "u2" },
+    ];
+    const head = foldMessages(msgs("context"));
+    expect(head.system).toBe("SYS");
+    expect(head.prompt.indexOf("BLOCK")).toBeLessThan(head.prompt.indexOf("[USER]\nu1"));
+    const tail = foldMessages(msgs("context-tail"));
+    expect(tail.system).toBe("SYS");
+    expect(tail.prompt.indexOf("BLOCK")).toBeGreaterThan(tail.prompt.indexOf("[USER]\nu2"));
+    expect(tail.prompt).toContain("BEARS ON THE LAST MESSAGE");
+  });
+
   it("a session with graphRag shows the retrieved block as a context message and records the retrieval on the reply", async () => {
     let prompt: string[] = [];
     const provider: LLMProvider = {

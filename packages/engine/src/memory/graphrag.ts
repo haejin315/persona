@@ -45,6 +45,12 @@ export interface GraphRagOptions {
    * nodes seed (round 2 at 60).
    */
   edgeCandidates?: number;
+  /**
+   * After ranking, this many more candidate edges with the top edge's subject and relation are
+   * kept next to it (default 2): the message "I drew comics as a child" ranks 민수 —그렸다→ 만화
+   * first, and the title is 민수 —그렸다→ 달빛 고양이, 15th by cosine (round 3, t996). 0 = off.
+   */
+  expandTop?: number;
   /** Vector hits below this cosine are dropped (default 0, keep all). */
   minScore?: number;
   /**
@@ -190,6 +196,17 @@ export class GraphRag {
       seen.add(k);
       return true;
     });
+    // The top edge's siblings (same subject and relation) come next to it, ahead of the cut: what
+    // the message is about is often one hop beside what it says.
+    const expand = this.opts.expandTop ?? 2;
+    if (expand > 0 && edges.length > 1) {
+      const top = edges[0]!;
+      const siblings = edges.slice(1).filter((e) => e.subject === top.subject && e.relation === top.relation).slice(0, expand);
+      if (siblings.length) {
+        const rest = edges.slice(1).filter((e) => !siblings.includes(e));
+        edges = [top, ...siblings, ...rest];
+      }
+    }
     edges = edges.slice(0, edgeLimit);
     const min = this.opts.minScore ?? 0;
     const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
@@ -229,10 +246,32 @@ export class GraphRag {
   }
 }
 
-/** The context block the character reads. Empty string when nothing was found. */
-export function renderGraphRag(r: GraphRagResult, now: number, user: string): string {
+/**
+ * The context block the character reads. Empty string when nothing was found. Style "v1" is the
+ * round 1-3 block (graph / facts / exchanges). Style "v2" (round 4) separates what the user said
+ * from what the character itself said or planned at the time, and states how to read both: a
+ * question about the past is answered from here even when MEMORY shows something newer, a detail
+ * here is said out loud when asked for, and a plan whose day has passed is over, not re-proposed.
+ */
+export function renderGraphRag(r: GraphRagResult, now: number, user: string, o: { character?: string; style?: "v1" | "v2" } = {}): string {
   const age = (turnTo: number) => `[about ${Math.max(1, Math.round((now - turnTo) / 2))} exchanges ago]`;
   const parts: string[] = [];
+  if (o.style === "v2") {
+    const me = (o.character ?? "").replace(/\s*(씨|님)$/u, "");
+    const mine = (e: GraphEdge) => !!me && e.subject === me;
+    const edgeLine = (e: GraphEdge) => `- ${age(e.turnTo)} ${e.subject} —${e.relation}→ ${e.object}${e.current ? "" : " (no longer)"}: ${e.text}`;
+    const factLine = (f: GraphRagResult["facts"][number]) => `- ${age(f.turnTo)} ${f.text}`;
+    const about = [...r.edges.filter((e) => !mine(e)).map(edgeLine), ...r.facts.filter((f) => !f.self).map(factLine)];
+    const own = [...r.edges.filter(mine).map(edgeLine), ...r.facts.filter((f) => f.self).map(factLine)];
+    if (about.length) parts.push(`## ABOUT ${user} (what ${user} told you or you saw, at the time marked; "no longer" = true then, changed since)\n${about.join("\n")}`);
+    if (own.length) parts.push(`## WHAT YOU SAID OR PLANNED THEN (your own words at the time marked - a promise or plan here was for that day; if that day is past, it is over and you do not propose it again)\n${own.join("\n")}`);
+    if (r.chunks.length) parts.push(`## PAST EXCHANGES, verbatim\n${r.chunks.map((c) => `${age(c.turnTo)}\n${c.text}`).join("\n\n")}`);
+    if (!parts.length) return "";
+    return `# WHAT YOU REMEMBER ABOUT THIS (from the whole history with ${user}, found for what ${user} just said; as true as MEMORY; each line says how long ago it was said, and "tomorrow" or "next week" inside a line counts from then, not from now)
+How to use it: when ${user} asks what was said or what things were like before, answer from here, in your own words, even if MEMORY shows something newer now - the old thing was true then, say so plainly. A name, a title, a number or a place that is here is said out loud when ${user} asks for it; never say you were not told something that is written here. For what is true right now, MEMORY above and this conversation win.
+
+${parts.join("\n\n")}`;
+  }
   if (r.edges.length) {
     parts.push(
       `## KNOWLEDGE GRAPH (what is known about ${r.seeds.join(", ")} and what connects to it; "no longer" marks what was true then and has since changed)\n` +

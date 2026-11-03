@@ -95,8 +95,12 @@ export interface Arm {
     minScore?: number;
     tokenLinking?: boolean;
     maxTokenShare?: number;
+    expandTop?: number;
     /** transformers.js model id for the local embedder (default Xenova/multilingual-e5-small). */
     embedModel?: string;
+    /** Round 4 (docs/14): block placement ("head" ahead of the transcript, "tail" after it) and layout ("v1" / "v2"). */
+    at?: "head" | "tail";
+    render?: "v1" | "v2";
   };
   /** Engine-side reply filters for this arm (see engine filters.ts). */
   filters?: { repeatedOpener?: boolean };
