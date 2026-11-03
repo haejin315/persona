@@ -78,16 +78,30 @@ export class Neo4jGraph implements GraphStore {
       .map((e) => ({ ...e, subject: norm(e.subject), object: norm(e.object), relation: e.relation.trim(), replaces: e.replaces === true }))
       .filter((e) => e.subject && e.object && e.relation && e.subject !== e.object);
     if (!rows.length) return;
+    // A replacing row must see the edges the rows before it created: within one UNWIND the
+    // OPTIONAL MATCH does not (plan and event in the same batch), so replacing rows go one per
+    // query after the plain ones.
+    const batches = [rows.filter((r) => !r.replaces), ...rows.filter((r) => r.replaces).map((r) => [r])].filter((b) => b.length);
+    for (const batch of batches) await this.addBatch(batch);
+  }
+
+  private async addBatch(rows: { subject: string; object: string; relation: string; text: string; turnFrom: number; turnTo: number; replaces: boolean }[]): Promise<void> {
     await this.driver.executeQuery(
       `UNWIND $rows AS r
        MERGE (s:Entity {ns: $ns, name: r.subject})
        MERGE (o:Entity {ns: $ns, name: r.object})
        WITH s, o, r
        // When the summariser judged this a change, the same subject and relation pointing elsewhere
-       // was then, and this is now.
+       // was then, and this is now (민수 마신다 라떼 after 민수 마신다 아메리카노) - and so was the
+       // same subject and object under another relation (민수 다녀왔다 태호 결혼식 after 민수 간다
+       // 태호 결혼식: the plan became the event, round 5).
        OPTIONAL MATCH (s)-[old:REL {ns: $ns, rel: r.relation, current: true}]->(other:Entity)
          WHERE other <> o AND r.replaces
        SET old.current = false
+       WITH s, o, r
+       OPTIONAL MATCH (s)-[old2:REL {ns: $ns, current: true}]->(o)
+         WHERE old2.rel <> r.relation AND r.replaces
+       SET old2.current = false
        WITH s, o, r
        MERGE (s)-[x:REL {ns: $ns, rel: r.relation, text: r.text}]->(o)
        ON CREATE SET x.turnFrom = r.turnFrom, x.turnTo = r.turnTo, x.current = true`,
@@ -169,7 +183,9 @@ export class MemoryGraph implements GraphStore {
     for (const e0 of edges) {
       const e = { ...e0, subject: norm(e0.subject), object: norm(e0.object), relation: e0.relation.trim() };
       if (!e.subject || !e.object || !e.relation || e.subject === e.object) continue;
-      if (e.replaces) for (const old of this.edges) if (old.subject === e.subject && old.relation === e.relation && old.object !== e.object) old.current = false;
+      if (e.replaces)
+        for (const old of this.edges)
+          if (old.subject === e.subject && ((old.relation === e.relation && old.object !== e.object) || (old.object === e.object && old.relation !== e.relation))) old.current = false;
       const dup = this.edges.find((x) => x.subject === e.subject && x.relation === e.relation && x.object === e.object && x.text === e.text);
       if (!dup) this.edges.push({ ...e, current: true, depth: 0 });
     }

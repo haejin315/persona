@@ -5,7 +5,7 @@ import { ChatSession } from "../session.js";
 import { emptyMemory, type ArchivedFact, type Turn } from "../types.js";
 import { chunkAll, chunkRange } from "./chunker.js";
 import { MemoryGraph } from "./graphdb.js";
-import { GraphRag, factId, renderGraphRag } from "./graphrag.js";
+import { GraphRag, factId, renderGraphRag, speechOf, speechSentences } from "./graphrag.js";
 import { bigramEmbedder } from "./recall.js";
 import { MemoryVectorIndex, uuidFor } from "./vectordb.js";
 
@@ -201,6 +201,49 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(tail.system).toBe("SYS");
     expect(tail.prompt.indexOf("BLOCK")).toBeGreaterThan(tail.prompt.indexOf("[USER]\nu2"));
     expect(tail.prompt).toContain("BEARS ON THE LAST MESSAGE");
+  });
+
+  it("round 5: spoken sentences are the query, the character's last reply seeds too, and a plan becoming the event supersedes the plan", async () => {
+    // Stage directions are not spoken; quotes are stripped; sentences split.
+    expect(speechSentences('*문손잡이를 잡은 채 잠깐 멈춘다.*  "아, 하나만요. 제가 어릴 때 공책에 만화를 그린 적이 있어요."  "내일 또 올게요."')).toEqual([
+      "아, 하나만요.",
+      "제가 어릴 때 공책에 만화를 그린 적이 있어요.",
+      "내일 또 올게요.",
+    ]);
+    expect(speechOf("*컵을 내려놓는다.* \"네.\"")).toBe('"네."');
+    const vectors = new MemoryVectorIndex();
+    const graph = new MemoryGraph();
+    const embedder = bigramEmbedder(256);
+    const message = '*문손잡이를 잡은 채 잠깐 멈춘다.*  "아, 하나만요. 제가 어릴 때 공책에 만화를 그린 적이 있어요."  "갑자기 생각나서요. 내일 또 올게요."';
+    const bySentence = new GraphRag({ ns: "q", embedder, vectors, graph, query: "sentences", factK: 1, selfK: 0, edgeLimit: 0 });
+    await bySentence.ingestFacts(facts);
+    const r = await bySentence.retrieve(message, { ignore: ["하루", "민수"] });
+    // The 만화 fact is nearest to its own sentence; its score is that sentence's, not the whole message's.
+    expect(r.facts[0]!.text).toBe("민수는 어릴 때 만화를 그렸다");
+    const [sv] = await embedder.embed(["제가 어릴 때 공책에 만화를 그린 적이 있어요."], "query");
+    const direct = await vectors.search("q-facts", sv!, { limit: 1, filter: { self: false } });
+    expect(r.facts[0]!.score).toBeCloseTo(direct[0]!.score, 6);
+    const whole = new GraphRag({ ns: "q", embedder, vectors, graph, query: "message", factK: 1, selfK: 0, edgeLimit: 0 });
+    const [mv] = await embedder.embed([message], "query");
+    const wholeDirect = await vectors.search("q-facts", mv!, { limit: 1, filter: { self: false } });
+    expect((await whole.retrieve(message, { ignore: ["하루", "민수"] })).facts[0]!.score).toBeCloseTo(wholeDirect[0]!.score, 6);
+    // Context seeds the graph (the character's own last reply named the hospital), the message alone does not.
+    const seeded = new GraphRag({ ns: "q", embedder, vectors, graph, selfK: 0 });
+    expect((await seeded.retrieve('"네, 갈게요."', { ignore: ["하루", "민수"] })).seeds).toEqual([]);
+    const withContext = await seeded.retrieve('"네, 갈게요."', { ignore: ["하루", "민수"], context: ['"하늘 동물병원 이름은 제가 들은 기억이 없어요."'] });
+    expect(withContext.seeds).toContain("하늘 동물병원");
+    expect(withContext.edges.some((e) => e.object === "하늘 동물병원")).toBe(true);
+    // (subject, object) supersede: the report that the wedding was attended replaces the plan to go.
+    const g2 = new MemoryGraph();
+    await g2.addTriples([
+      { subject: "민수", relation: "간다", object: "태호 결혼식", text: "민수는 태호 결혼식에 간다", turnFrom: 1, turnTo: 1 },
+      { subject: "민수", relation: "좋아한다", object: "태호", text: "민수는 태호를 좋아한다", turnFrom: 1, turnTo: 1 },
+      { subject: "민수", relation: "다녀왔다", object: "태호 결혼식", text: "민수는 태호 결혼식에 다녀왔다", turnFrom: 9, turnTo: 9, replaces: true },
+    ]);
+    const edges = await g2.neighborhood(["태호 결혼식", "태호"], { hops: 1, limit: 10 });
+    expect(edges.find((e) => e.relation === "간다")!.current).toBe(false);
+    expect(edges.find((e) => e.relation === "다녀왔다")!.current).toBe(true);
+    expect(edges.find((e) => e.relation === "좋아한다")!.current).toBe(true);
   });
 
   it("a session with graphRag shows the retrieved block as a context message and records the retrieval on the reply", async () => {

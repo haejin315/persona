@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6";
+  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -89,7 +89,8 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
-    const v6 = this.cfg.rules === "v6";
+    const v7 = this.cfg.rules === "v7";
+    const v6 = this.cfg.rules === "v6" || v7;
     const v5 = this.cfg.rules === "v5" || v6;
     const v3 = this.cfg.rules === "v3" || this.cfg.rules === "v4" || v5;
     const v4 = this.cfg.rules === "v4" || v5;
@@ -142,6 +143,11 @@ export class MemoryManager {
       ...(v6
         ? [
             `"replaces": true on a triple means the old fact with the same subject and relation no longer holds (a new drink, a new home, a changed plan). Two facts that both stay true (민수 그렸다 만화 and 민수 그렸다 달빛 고양이; two different promises) are NOT a replacement - leave "replaces" out. This is a judgement about the story, not about the words. A node is also never a phrase built on a time word (토요일 컵, 금요일 마감, 내일 얘기 are not nodes - the node there is 컵, 마감, or none): what one could ask about later is the thing, not the day.`,
+          ]
+        : []),
+      ...(v7
+        ? [
+            `A plan becoming the event is also a replacement: when the user reports that something planned or awaited has now happened (the wedding attended, the move done, the result received, the trip taken), the new fact gets "replaces": true with the same subject and object as the plan (민수 다녀왔다 태호 결혼식 replaces 민수 간다 태호 결혼식) - the plan is over, and the character must not treat it as still ahead.`,
           ]
         : []),
     ].join("\n");

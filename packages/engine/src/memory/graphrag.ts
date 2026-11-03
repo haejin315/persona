@@ -2,7 +2,7 @@ import type { ArchivedFact, Turn } from "../types.js";
 import { chunkRange, type ChunkOptions } from "./chunker.js";
 import type { GraphEdge, GraphStore } from "./graphdb.js";
 import type { Embedder } from "./recall.js";
-import type { VectorIndex } from "./vectordb.js";
+import type { VectorFilter, VectorHitRow, VectorIndex } from "./vectordb.js";
 
 /**
  * Graph RAG memory (docs/14): the transcript is chunked and embedded into a vector database, the
@@ -51,6 +51,15 @@ export interface GraphRagOptions {
    * first, and the title is 민수 —그렸다→ 달빛 고양이, 15th by cosine (round 3, t996). 0 = off.
    */
   expandTop?: number;
+  /**
+   * What is embedded as the query (round 5, docs/14). "message": the whole user message (rounds
+   * 1-4). "speech": the message without its *stage directions*. "sentences": each spoken sentence
+   * on its own, every candidate scored by its best sentence - a message carries several topics
+   * ("아, 하나만요." / "어릴 때 만화를 그렸어요." / "내일 또 올게요."), and one vector of the whole
+   * message lands between them (t996: the title's edge ranked 29th of 51 by the whole message,
+   * 6th by its best sentence).
+   */
+  query?: "message" | "speech" | "sentences";
   /** Vector hits below this cosine are dropped (default 0, keep all). */
   minScore?: number;
   /**
@@ -80,6 +89,17 @@ export interface GraphRagResult {
 }
 
 /** The id a fact has in the facts collection; an edge carries the same fields, so it maps back. */
+/** The message without its *stage directions*. */
+export const speechOf = (message: string): string => message.replace(/\*[^*\n]*\*/g, " ").replace(/\s+/g, " ").trim();
+
+/** The spoken sentences of a message, quotes stripped, for the "sentences" query mode. */
+export function speechSentences(message: string): string[] {
+  return speechOf(message)
+    .split(/(?<=[.!?。…])\s+|"\s+"|"\s*$/u)
+    .map((s) => s.replace(/^["“”]+|["“”]+$/gu, "").trim())
+    .filter((s) => s.length >= 2);
+}
+
 export const factId = (f: { turnFrom: number; turnTo: number; text: string }) => `f${f.turnFrom}-${f.turnTo}:${f.text}`;
 
 export class GraphRag {
@@ -153,29 +173,42 @@ export class GraphRag {
    * turns still verbatim in the prompt out of the vector hits; `ignore` are the speakers' names,
    * which seed nothing (they touch every edge).
    */
-  async retrieve(message: string, o: { turnToMax?: number; ignore?: string[] } = {}): Promise<GraphRagResult> {
+  async retrieve(message: string, o: { turnToMax?: number; ignore?: string[]; context?: string[] } = {}): Promise<GraphRagResult> {
     const ignore = new Set((o.ignore ?? []).map((s) => s.replace(/\s*(씨|님)$/u, "")));
     const edgeLimit = this.opts.edgeLimit ?? 12;
     const candidates = this.opts.edgeCandidates ?? 300;
-    const { seeds, hubs } = edgeLimit > 0 ? await this.seeds(message, ignore) : { seeds: [], hubs: [] };
-    const [candidateEdges, [qv]] = await Promise.all([
+    // Seeds come from the message and, when given, the context (round 5: the character's own last
+    // reply - a name it brought up itself is what the next turn is about, t814/816). The vectors
+    // are queried with the message alone.
+    const seedText = [message, ...(o.context ?? [])].join("\n");
+    const { seeds, hubs } = edgeLimit > 0 ? await this.seeds(seedText, ignore) : { seeds: [], hubs: [] };
+    const mode = this.opts.query ?? "message";
+    const queries = mode === "sentences" ? speechSentences(message) : mode === "speech" ? [speechOf(message)] : [message];
+    if (!queries.length || !queries[0]) queries.splice(0, queries.length, message);
+    const [candidateEdges, qvs] = await Promise.all([
       seeds.length
         ? this.opts.graph.neighborhood(seeds, { hops: this.opts.hops ?? 2, limit: Math.max(edgeLimit, candidates), hubs })
         : Promise.resolve([] as GraphEdge[]),
-      this.opts.embedder.embed([message], "query"),
+      this.opts.embedder.embed(queries, "query"),
     ]);
+    // One search per query vector; a point's score is its best over them (max fusion).
+    const search = async (collection: string, opts: { limit: number; filter?: VectorFilter }) => {
+      const lists = await Promise.all(qvs.map((qv) => this.opts.vectors.search(collection, qv, opts)));
+      if (lists.length === 1) return lists[0]!;
+      const best = new Map<string, VectorHitRow>();
+      for (const hits of lists) for (const h of hits) if ((best.get(h.id)?.score ?? -Infinity) < h.score) best.set(h.id, h);
+      return [...best.values()].sort((a, b) => b.score - a.score).slice(0, opts.limit);
+    };
     const filter = o.turnToMax !== undefined ? { turnToMax: o.turnToMax } : {};
     const selfK = this.opts.selfK ?? 2;
     const factK = this.opts.factK ?? 5;
     const [chunkHits, userFactHits, selfFactHits, edgeScores] = await Promise.all([
-      this.opts.vectors.search(this.chunksCollection, qv!, { limit: this.opts.chunkK ?? 3, filter }),
-      selfK < 0
-        ? this.opts.vectors.search(this.factsCollection, qv!, { limit: factK, filter })
-        : this.opts.vectors.search(this.factsCollection, qv!, { limit: factK, filter: { ...filter, self: false } }),
-      selfK > 0 ? this.opts.vectors.search(this.factsCollection, qv!, { limit: selfK, filter: { ...filter, self: true } }) : Promise.resolve([]),
+      search(this.chunksCollection, { limit: this.opts.chunkK ?? 3, filter }),
+      selfK < 0 ? search(this.factsCollection, { limit: factK, filter }) : search(this.factsCollection, { limit: factK, filter: { ...filter, self: false } }),
+      selfK > 0 ? search(this.factsCollection, { limit: selfK, filter: { ...filter, self: true } }) : Promise.resolve([] as VectorHitRow[]),
       candidates > 0 && candidateEdges.length > 0
-        ? this.opts.vectors.search(this.factsCollection, qv!, { limit: candidateEdges.length, filter: { ids: [...new Set(candidateEdges.map(factId))] } })
-        : Promise.resolve([]),
+        ? search(this.factsCollection, { limit: candidateEdges.length, filter: { ids: [...new Set(candidateEdges.map(factId))] } })
+        : Promise.resolve([] as VectorHitRow[]),
     ]);
     // Rank the neighbourhood by how close each edge's fact is to the message; edges whose fact the
     // vector store does not hold keep the graph's order after the scored ones.
@@ -263,7 +296,7 @@ export function renderGraphRag(r: GraphRagResult, now: number, user: string, o: 
     const factLine = (f: GraphRagResult["facts"][number]) => `- ${age(f.turnTo)} ${f.text}`;
     const about = [...r.edges.filter((e) => !mine(e)).map(edgeLine), ...r.facts.filter((f) => !f.self).map(factLine)];
     const own = [...r.edges.filter(mine).map(edgeLine), ...r.facts.filter((f) => f.self).map(factLine)];
-    if (about.length) parts.push(`## ABOUT ${user} (what ${user} told you or you saw, at the time marked; "no longer" = true then, changed since)\n${about.join("\n")}`);
+    if (about.length) parts.push(`## ABOUT ${user} (what ${user} told you or you saw, at the time marked; "no longer" = true then, changed since; a plan or a date in an old line may already have come and gone - a later line about the same thing tells you)\n${about.join("\n")}`);
     if (own.length) parts.push(`## WHAT YOU SAID OR PLANNED THEN (your own words at the time marked - a promise or plan here was for that day; if that day is past, it is over and you do not propose it again)\n${own.join("\n")}`);
     if (r.chunks.length) parts.push(`## PAST EXCHANGES, verbatim\n${r.chunks.map((c) => `${age(c.turnTo)}\n${c.text}`).join("\n\n")}`);
     if (!parts.length) return "";

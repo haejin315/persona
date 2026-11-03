@@ -56,6 +56,8 @@ export interface SessionOptions {
     at?: "head" | "tail";
     /** Block layout: "v1" (round 1-3) or "v2" (round 4: facts about the user apart from the character's own past words, with reading rules). */
     render?: "v1" | "v2";
+    /** Round 5: how many of the character's own latest replies also seed the graph (a name it brought up itself is what the next turn is about). Default 0. */
+    carry?: number;
   };
   model?: string;
   temperature?: number;
@@ -114,6 +116,7 @@ export class ChatSession {
   knowledge?: string;
   private knowledgeAt: "head" | "tail" = "head";
   private knowledgeRender: "v1" | "v2" = "v1";
+  private knowledgeCarry = 0;
   private retrievalMeta?: NonNullable<Turn["meta"]>["retrieval"] & { lines: NonNullable<NonNullable<Turn["meta"]>["recalled"]> };
   private ingestedUpTo = -1;
   private rebuilding?: Promise<void>;
@@ -154,9 +157,10 @@ export class ChatSession {
       this.ownStore = !store;
     }
     if (opts.graphRag) {
-      const { at, render, ...g } = opts.graphRag;
+      const { at, render, carry, ...g } = opts.graphRag;
       this.knowledgeAt = at ?? "head";
       this.knowledgeRender = render ?? "v1";
+      this.knowledgeCarry = carry ?? 0;
       this.graphRag = new GraphRag({
         ...g,
         embedder: g.embedder ?? localEmbedder(),
@@ -506,7 +510,8 @@ export class ChatSession {
     if (!last) return;
     const name = this.card.name[this.lang] ?? this.card.name.ko ?? this.card.id;
     const t0 = performance.now();
-    const r = await this.graphRag.retrieve(last.content, { turnToMax: this.memory.coveredUpTo, ignore: [name, this.persona.name] });
+    const context = this.knowledgeCarry > 0 ? this.turns.filter((t) => t.role === "character").slice(-this.knowledgeCarry).map((t) => t.content) : undefined;
+    const r = await this.graphRag.retrieve(last.content, { turnToMax: this.memory.coveredUpTo, ignore: [name, this.persona.name], ...(context?.length ? { context } : {}) });
     const ms = Math.round(performance.now() - t0);
     const block = renderGraphRag(r, this.turns.length, this.persona.name, { character: name, style: this.knowledgeRender });
     this.knowledge = block || undefined;
