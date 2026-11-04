@@ -315,6 +315,35 @@ describe("memory manager", () => {
     expect(ctx.content).toContain("이사는 다다음 주라 아직 전이다");
   });
 
+  it("rules v9 tell the summariser it has no clock, and v9b asks for one sentence without a plan list (docs/14 7차)", async () => {
+    const prompts: string[] = [];
+    const capture = (rules: "v8" | "v9" | "v9b"): MemoryManager =>
+      new MemoryManager(
+        {
+          id: "fake",
+          defaultModel: "fake-1",
+          async generate(m) {
+            prompts.push(m.map((x) => x.content).join("\n"));
+            return { text: JSON.stringify({ summary: "s", facts: [], relationship: { stage: "acquaintance", notes: [] }, now: "토요일 아침." }), model: "fake-1", latencyMs: 1, usage: { promptTokens: 1, completionTokens: 1 } };
+          },
+          async *stream() {
+            yield "ok";
+          },
+        } as LLMProvider,
+        { windowTurns: 2, consolidateEvery: 1, rules },
+      );
+    const m8 = await capture("v8").consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    const m9 = await capture("v9").consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    const m9b = await capture("v9b").consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    expect([m8.now, m9.now, m9b.now]).toEqual(["토요일 아침.", "토요일 아침.", "토요일 아침."]);
+    expect(prompts[0]).not.toContain("You have no clock");
+    expect(prompts[1]).toContain("You have no clock and no calendar");
+    expect(prompts[1]).toContain("one or two sentences");
+    expect(prompts[2]).toContain("You have no clock and no calendar");
+    expect(prompts[2]).toContain("ONE sentence");
+    expect(prompts[2]).toContain("do not list what is still ahead");
+  });
+
   it("rules v3 keeps the source the model gives each fact and drops malformed ones", async () => {
     const reply = JSON.stringify({
       summary: "s",

@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7" | "v8";
+  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7" | "v8" | "v9" | "v9b";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -89,7 +89,9 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
-    const v8 = this.cfg.rules === "v8";
+    const v9b = this.cfg.rules === "v9b";
+    const v9 = this.cfg.rules === "v9" || v9b;
+    const v8 = this.cfg.rules === "v8" || v9;
     const v7 = this.cfg.rules === "v7" || v8;
     const v6 = this.cfg.rules === "v6" || v7;
     const v5 = this.cfg.rules === "v5" || v6;
@@ -110,7 +112,9 @@ export class MemoryManager {
       '  "relationship": { "stage": "one of: initial | acquaintance | friendly | close | intimate | strained", "notes": ["how the relationship changed and why"] }',
       ...(v8
         ? [
-            `  "now": "where things stand at the end of the NEW TRANSCRIPT, one or two sentences in ${LANG_NAME[lang]}: the day or time of day if the lines say it, what the user is in the middle of, which once-planned things have already happened, what is still ahead - written fresh from the latest lines every time, never carried forward"`,
+            v9b
+              ? `  "now": "where things stand at the end of the NEW TRANSCRIPT, ONE sentence in ${LANG_NAME[lang]}: the weekday or time of day if the lines say it, and what the user is in the middle of at the last line - written fresh from the latest lines every time, never carried forward; no list of plans still ahead (the facts hold the promises)"`
+              : `  "now": "where things stand at the end of the NEW TRANSCRIPT, one or two sentences in ${LANG_NAME[lang]}: the day or time of day if the lines say it, what the user is in the middle of, which once-planned things have already happened, what is still ahead - written fresh from the latest lines every time, never carried forward"`,
           ]
         : []),
       ...(v4
@@ -159,6 +163,16 @@ export class MemoryManager {
       ...(v8
         ? [
             `"now" is the present, not the record: the summary and facts say what was said, "now" says where the story stands as the latest lines leave it - the day if the user named it (the user said it is Saturday, so it is Saturday and a Saturday promise is for today, not later), what has just happened, what comes next. A plan whose day has come or gone is written as done or missed, never as still upcoming; a date already passed is marked passed. Where the lines do not say, write what they imply and nothing more.`,
+            ...(v9
+              ? [
+                  `You have no clock and no calendar; the story keeps its own. A calendar date (a month and a day) goes into "now" only when a line of the NEW TRANSCRIPT says that today is that date, and a weekday only when a line names it. Whatever you may know about the actual date outside the story is not the story's date and never goes in. A date named for something else - a birthday, a wedding, a deadline - does not say what day it is now, and whether it has passed can only be read from the lines, never from a date you supplied.`,
+                ]
+              : []),
+            ...(v9b
+              ? [
+                  `"now" is one sentence: the weekday or time of day the lines give and what is happening at the last line. Promises and plans stay in the facts; do not list what is still ahead.`,
+                ]
+              : []),
           ]
         : []),
     ].join("\n");
