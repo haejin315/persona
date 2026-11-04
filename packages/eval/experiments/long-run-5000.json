@@ -1,0 +1,26 @@
+{
+  "scenarioIds": [
+    "haru-ko-5000"
+  ],
+  "arms": [
+    {
+      "id": "v13-ledger25/sonnet",
+      "promptVersion": "v13-structured",
+      "model": "claude-cli:sonnet",
+      "memory": { "rules": "v4" }
+    },
+    {
+      "id": "v13-ledger10-graphrag8/sonnet",
+      "promptVersion": "v13-structured",
+      "model": "claude-cli:sonnet",
+      "memory": { "rules": "v9", "maxFacts": 10, "maxFactChars": 1000 },
+      "graphRag": { "chunkK": 3, "factK": 5, "selfK": 2, "hops": 2, "edgeLimit": 12, "edgeCandidates": 300, "tokenLinking": true, "maxTokenShare": 0.02, "expandTop": 2, "embedModel": "Xenova/multilingual-e5-base", "render": "v2", "at": "tail", "query": "sentences", "fusion": "interleave", "carry": 1 }
+    }
+  ],
+  "userTurns": 5000,
+  "simulatorModel": "claude-cli:sonnet",
+  "memoryModel": "claude-cli:haiku",
+  "repeats": 1,
+  "judgeModel": "claude-cli:opus",
+  "outDir": "eval-results/long-run-5000"
+}
