@@ -203,6 +203,53 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(tail.prompt).toContain("BEARS ON THE LAST MESSAGE");
   });
 
+  it("round 8: a named replacement retires only the edge it names; true retires every edge under the same subject and relation", async () => {
+    const g = new MemoryGraph();
+    const base = { text: "", turnFrom: 1, turnTo: 1 };
+    await g.addTriples([
+      { ...base, subject: "민수", relation: "산다", object: "성수동" },
+      { ...base, subject: "민수", relation: "산다", object: "펜탁스 ME" },
+      { ...base, subject: "민수", relation: "간다", object: "태호 결혼식" },
+      { ...base, subject: "민수", relation: "약속했다", object: "태호 결혼식" },
+    ]);
+    await g.addTriples([{ ...base, turnFrom: 5, turnTo: 5, subject: "민수", relation: "산다", object: "망원동", replaces: "성수동" }]);
+    await g.addTriples([{ ...base, turnFrom: 6, turnTo: 6, subject: "민수", relation: "다녀왔다", object: "태호 결혼식", replaces: "간다" }]);
+    const current = Object.fromEntries((await g.neighborhood(["민수"], { hops: 1, limit: 20 })).map((e) => [`${e.relation} ${e.object}`, e.current]));
+    expect(current).toEqual({ "산다 성수동": false, "산다 펜탁스 ME": true, "산다 망원동": true, "간다 태호 결혼식": false, "약속했다 태호 결혼식": true, "다녀왔다 태호 결혼식": true });
+    // A name that matches nothing retires nothing (the old fact may never have become a triple).
+    await g.addTriples([{ ...base, turnFrom: 7, turnTo: 7, subject: "민수", relation: "산다", object: "상암동", replaces: "연희동" }]);
+    expect((await g.neighborhood(["민수"], { hops: 1, limit: 20 })).find((e) => e.object === "망원동")!.current).toBe(true);
+    // true is the old rule: everything under 산다 goes.
+    await g.addTriples([{ ...base, turnFrom: 8, turnTo: 8, subject: "민수", relation: "산다", object: "연남동", replaces: true }]);
+    const after = (await g.neighborhood(["민수"], { hops: 1, limit: 20 })).filter((e) => e.relation === "산다");
+    expect(after.filter((e) => e.current).map((e) => e.object)).toEqual(["연남동"]);
+  });
+
+  it("round 8: seeds come in tiers (whole name in the message first, a token in the carried context last) and maxSeeds / maxTokenNames cap them", async () => {
+    const g = new MemoryGraph();
+    // Six "… 소리" nodes among 400+ names: with the share rule alone (2% of the names, floor 3) the
+    // token 소리 links them all once the graph is large; the absolute cap stops that.
+    const sounds: ArchivedFact[] = Array.from({ length: 6 }, (_, i) => ({ text: `하루는 ${i}번 소리를 들었다`, source: "self", turnFrom: 10 + i, turnTo: 10 + i, triple: { subject: "하루", relation: "들었다", object: `${["그라인더", "문", "바람", "그릇", "의자", "알람"][i]} 소리` } }));
+    const others: ArchivedFact[] = Array.from({ length: 400 }, (_, i) => ({ text: `민수는 물건 ${i}을 샀다`, source: "user", turnFrom: 100 + i, turnTo: 100 + i, triple: { subject: "민수", relation: "샀다", object: `물건 ${i}` } }));
+    const job: ArchivedFact = { text: "민수는 루멘 디자인팀 팀장이 됐다", source: "user", turnFrom: 400, turnTo: 400, triple: { subject: "민수", relation: "맡았다", object: "루멘 디자인팀 팀장" } };
+    const cat: ArchivedFact = { text: "민수는 보리를 키운다", source: "user", turnFrom: 1, turnTo: 1, triple: { subject: "민수", relation: "키운다", object: "보리" } };
+    const all = [cat, job, ...sounds, ...others];
+    const message = "루멘에서 제 직책이 뭐였는지 기억하세요?";
+    const context = ["*그라인더 소리가 난다.* \"보리는 잘 있어요?\""];
+    const open = new GraphRag({ ns: "s", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, factK: 0, selfK: 0 });
+    await open.ingestFacts(all);
+    const r = await open.retrieve(message, { ignore: ["하루", "민수"], context });
+    // Tier order: 루멘 디자인팀 팀장 (token 루멘 in the message), 보리 (whole name in the context), then the 소리 nodes (token in the context).
+    expect(r.seeds[0]).toBe("루멘 디자인팀 팀장");
+    expect(r.seeds[1]).toBe("보리");
+    expect(r.seeds.filter((x) => x.endsWith("소리"))).toHaveLength(6);
+    const capped = new GraphRag({ ns: "s", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, factK: 0, selfK: 0, maxSeeds: 2 });
+    expect((await capped.retrieve(message, { ignore: ["하루", "민수"], context })).seeds).toEqual(["루멘 디자인팀 팀장", "보리"]);
+    const strict = new GraphRag({ ns: "s", embedder: bigramEmbedder(256), vectors: new MemoryVectorIndex(), graph: g, edgeLimit: 3, factK: 0, selfK: 0, maxTokenNames: 3 });
+    // 소리 is in 6 names > 3: no token link, only the one sound named whole in the context; 루멘 is in one name: still links.
+    expect((await strict.retrieve(message, { ignore: ["하루", "민수"], context })).seeds).toEqual(["루멘 디자인팀 팀장", "보리", "그라인더 소리"]);
+  });
+
   it("round 5: spoken sentences are the query, the character's last reply seeds too, and a plan becoming the event supersedes the plan", async () => {
     // Stage directions are not spoken; quotes are stripped; sentences split.
     expect(speechSentences('*문손잡이를 잡은 채 잠깐 멈춘다.*  "아, 하나만요. 제가 어릴 때 공책에 만화를 그린 적이 있어요."  "내일 또 올게요."')).toEqual([

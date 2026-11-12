@@ -16,9 +16,10 @@ export interface Triple {
   /**
    * The summariser's judgement (memory rules v6) that this triple replaces what held before about
    * the same subject and relation. Without it, an older edge with another object stays current:
-   * 민수 그렸다 만화 and 민수 그렸다 달빛 고양이 are both true.
+   * 민수 그렸다 만화 and 민수 그렸다 달빛 고양이 are both true. A string (rules v10) names the old
+   * object or the old relation, and only an edge matching it is superseded.
    */
-  replaces?: boolean;
+  replaces?: boolean | string;
 }
 
 export interface GraphEdge extends Triple {
@@ -75,7 +76,7 @@ export class Neo4jGraph implements GraphStore {
   async addTriples(edges: Omit<GraphEdge, "current" | "depth">[]): Promise<void> {
     await this.ensure();
     const rows = edges
-      .map((e) => ({ ...e, subject: norm(e.subject), object: norm(e.object), relation: e.relation.trim(), replaces: e.replaces === true }))
+      .map((e) => ({ ...e, subject: norm(e.subject), object: norm(e.object), relation: e.relation.trim(), replaces: e.replaces === true ? true : typeof e.replaces === "string" && norm(e.replaces) ? norm(e.replaces) : false }))
       .filter((e) => e.subject && e.object && e.relation && e.subject !== e.object);
     if (!rows.length) return;
     // A replacing row must see the edges the rows before it created: within one UNWIND the
@@ -85,7 +86,7 @@ export class Neo4jGraph implements GraphStore {
     for (const batch of batches) await this.addBatch(batch);
   }
 
-  private async addBatch(rows: { subject: string; object: string; relation: string; text: string; turnFrom: number; turnTo: number; replaces: boolean }[]): Promise<void> {
+  private async addBatch(rows: { subject: string; object: string; relation: string; text: string; turnFrom: number; turnTo: number; replaces: boolean | string }[]): Promise<void> {
     await this.driver.executeQuery(
       `UNWIND $rows AS r
        MERGE (s:Entity {ns: $ns, name: r.subject})
@@ -95,12 +96,14 @@ export class Neo4jGraph implements GraphStore {
        // was then, and this is now (민수 마신다 라떼 after 민수 마신다 아메리카노) - and so was the
        // same subject and object under another relation (민수 다녀왔다 태호 결혼식 after 민수 간다
        // 태호 결혼식: the plan became the event, round 5).
+       // A named replacement (rules v10) retires only the edge it names: the old object under the
+       // same relation, or the old relation over the same object.
        OPTIONAL MATCH (s)-[old:REL {ns: $ns, rel: r.relation, current: true}]->(other:Entity)
-         WHERE other <> o AND r.replaces
+         WHERE other <> o AND (r.replaces = true OR other.name = r.replaces)
        SET old.current = false
        WITH s, o, r
        OPTIONAL MATCH (s)-[old2:REL {ns: $ns, current: true}]->(o)
-         WHERE old2.rel <> r.relation AND r.replaces
+         WHERE old2.rel <> r.relation AND (r.replaces = true OR old2.rel = r.replaces)
        SET old2.current = false
        WITH s, o, r
        MERGE (s)-[x:REL {ns: $ns, rel: r.relation, text: r.text}]->(o)
@@ -183,9 +186,10 @@ export class MemoryGraph implements GraphStore {
     for (const e0 of edges) {
       const e = { ...e0, subject: norm(e0.subject), object: norm(e0.object), relation: e0.relation.trim() };
       if (!e.subject || !e.object || !e.relation || e.subject === e.object) continue;
-      if (e.replaces)
+      const named = typeof e.replaces === "string" ? norm(e.replaces) : undefined;
+      if (e.replaces === true || named)
         for (const old of this.edges)
-          if (old.subject === e.subject && ((old.relation === e.relation && old.object !== e.object) || (old.object === e.object && old.relation !== e.relation))) old.current = false;
+          if (old.subject === e.subject && ((old.relation === e.relation && old.object !== e.object && (!named || old.object === named)) || (old.object === e.object && old.relation !== e.relation && (!named || old.relation === named)))) old.current = false;
       const dup = this.edges.find((x) => x.subject === e.subject && x.relation === e.relation && x.object === e.object && x.text === e.text);
       if (!dup) this.edges.push({ ...e, current: true, depth: 0 });
     }

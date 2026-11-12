@@ -19,7 +19,7 @@ export interface MemoryConfig {
    * 200-turn v9 run the user said 성수동 three times and the fact list at turn 180 held "4층, 엘리베이터
    * 없음, 빵집 냄새" but not the name (docs/02); the summariser kept the details and dropped the noun.
    */
-  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7" | "v8" | "v9" | "v9b";
+  rules?: "v1" | "v2" | "v3" | "v4" | "v5" | "v6" | "v7" | "v8" | "v9" | "v9b" | "v10";
   /**
    * Cap on the fact ledger (default 25). The 200-turn replays sit at the cap from turn ~50 on, and
    * under that pressure the summariser merges facts and loses names (docs/02 "엉뚱한 칸").
@@ -89,8 +89,9 @@ export class MemoryManager {
 
     const name = card.name[lang] ?? card.id;
     const maxFacts = this.cfg.maxFacts ?? 25;
+    const v10 = this.cfg.rules === "v10";
     const v9b = this.cfg.rules === "v9b";
-    const v9 = this.cfg.rules === "v9" || v9b;
+    const v9 = this.cfg.rules === "v9" || v9b || v10;
     const v8 = this.cfg.rules === "v8" || v9;
     const v7 = this.cfg.rules === "v7" || v8;
     const v6 = this.cfg.rules === "v6" || v7;
@@ -119,7 +120,7 @@ export class MemoryManager {
         : []),
       ...(v4
         ? [
-            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]${v5 ? `, "triple": {"subject": "one entity or concept", "relation": "short verb phrase", "object": "one entity or concept"${v6 ? ', "replaces": "true only when this changes what held before about the same subject and relation"' : ""}}` : ""}}]`,
+            `  "new_facts": [{"text": "one concrete fact stated in the NEW TRANSCRIPT lines, in ${LANG_NAME[lang]}", "source": "user | self | witnessed | told | rumor", "by": "only when source is told", "entities": ["proper nouns in this fact: people, pets, places, shops, titles - verbatim"]${v5 ? `, "triple": {"subject": "one entity or concept", "relation": "short verb phrase", "object": "one entity or concept"${v10 ? ', "replaces": "only when this fact changes what held before: the old object (or the old relation) it retires, copied exactly from EXISTING MEMORY or the lines - or true when the old value is not known"' : v6 ? ', "replaces": "true only when this changes what held before about the same subject and relation"' : ""}}` : ""}}]`,
           ]
         : []),
       "}",
@@ -173,6 +174,12 @@ export class MemoryManager {
                   `"now" is one sentence: the weekday or time of day the lines give and what is happening at the last line. Promises and plans stay in the facts; do not list what is still ahead.`,
                 ]
               : []),
+            ...(v10
+              ? [
+                  `When the lines end a scene - the user leaves, says good night, the call ends, the shop closes - "now" says that it ended (the user has gone home; the call is over), not its last moment as if it were still going; the next line will be a new visit unless it says otherwise. What is still ahead belongs in the facts, not in "now".`,
+                  `"replaces" names what is retired, so that only that is retired: the old object when the same relation now points elsewhere (민수 마신다 라떼 with "replaces": "아메리카노"), the old relation when a plan became the event (민수 다녀왔다 태호 결혼식 with "replaces": "간다"). Copy the old value exactly as EXISTING MEMORY or the lines have it; write true only when the lines say something changed but not from what. A relation names its sense: 거주한다 for living somewhere and 샀다 for buying, never 산다 for both.`,
+                ]
+              : []),
           ]
         : []),
     ].join("\n");
@@ -215,7 +222,11 @@ export class MemoryManager {
                   subject: (t as Record<string, string>).subject!.trim(),
                   relation: (t as Record<string, string>).relation!.trim(),
                   object: (t as Record<string, string>).object!.trim(),
-                  ...((t as Record<string, unknown>).replaces === true ? { replaces: true } : {}),
+                  ...((t as Record<string, unknown>).replaces === true
+                    ? { replaces: true }
+                    : typeof (t as Record<string, unknown>).replaces === "string" && ((t as Record<string, string>).replaces ?? "").trim()
+                      ? { replaces: (t as Record<string, string>).replaces!.trim() }
+                      : {}),
                 }
               : undefined;
           return [{ ...f, turnFrom: from, turnTo: toExclusive - 1, ...(ents.length ? { entities: ents } : {}), ...(triple ? { triple } : {}) }];

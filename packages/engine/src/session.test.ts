@@ -344,6 +344,44 @@ describe("memory manager", () => {
     expect(prompts[2]).toContain("do not list what is still ahead");
   });
 
+  it("rules v10 tell the summariser to close a scene and to name what a fact replaces, and the 'scene' header presents 'now' as the last scene (docs/13 C → docs/14 8차)", async () => {
+    const prompts: string[] = [];
+    const reply = JSON.stringify({
+      summary: "s",
+      facts: [],
+      relationship: { stage: "acquaintance", notes: [] },
+      now: "민수는 집으로 갔고 통화는 끝났다.",
+      new_facts: [
+        { text: "민수는 이제 라떼를 마신다", source: "user", triple: { subject: "민수", relation: "마신다", object: "라떼", replaces: "아메리카노" } },
+        { text: "민수는 태호 결혼식에 다녀왔다", source: "user", triple: { subject: "민수", relation: "다녀왔다", object: "태호 결혼식", replaces: true } },
+        { text: "민수는 망원동으로 이사했다", source: "user", triple: { subject: "민수", relation: "거주한다", object: "망원동", replaces: "  " } },
+      ],
+    });
+    const provider = {
+      id: "fake",
+      defaultModel: "fake-1",
+      async generate(m) {
+        prompts.push(m.map((x) => x.content).join("\n"));
+        return { text: reply, model: "fake-1", latencyMs: 1, usage: { promptTokens: 1, completionTokens: 1 } };
+      },
+      async *stream() {
+        yield "ok";
+      },
+    } as LLMProvider;
+    const m = await new MemoryManager(provider, { windowTurns: 2, consolidateEvery: 1, rules: "v10" }).consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    expect(prompts[0]).toContain("You have no clock and no calendar");
+    expect(prompts[0]).toContain("When the lines end a scene");
+    expect(prompts[0]).toContain('"replaces" names what is retired');
+    expect(prompts[0]).toContain("the old object (or the old relation) it retires");
+    expect(m.now).toBe("민수는 집으로 갔고 통화는 끝났다.");
+    expect(m.archive!.map((f) => f.triple?.replaces)).toEqual(["아메리카노", true, undefined]);
+    // v9 keeps its own wording (no scene paragraph, "true only"); a name the model gives anyway is still kept.
+    const m9 = await new MemoryManager(provider, { windowTurns: 2, consolidateEvery: 1, rules: "v9" }).consolidate(cards[0]!, "ko", turns(6), emptyMemory());
+    expect(prompts[1]).not.toContain("When the lines end a scene");
+    expect(prompts[1]).toContain("true only when this changes what held before");
+    expect(m9.archive!.map((f) => f.triple?.replaces)).toEqual(["아메리카노", true, undefined]);
+  });
+
   it("rules v3 keeps the source the model gives each fact and drops malformed ones", async () => {
     const reply = JSON.stringify({
       summary: "s",

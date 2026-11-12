@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { newStreamState, parseStreamLine, systemPromptArgs } from "./claudeCli.js";
+import { exitError, newStreamState, parseStreamLine, systemPromptArgs } from "./claudeCli.js";
 
 describe("claude-cli system prompt argument (docs/12)", () => {
   it("passes a short prompt on the command line and a long one through a temp file that cleanup removes", () => {
@@ -35,5 +35,17 @@ describe("claude-cli stream-json parsing (docs/11)", () => {
     expect(st.text).toBe('*컵을 내려놓는다.* "네."');
     expect(st.result?.usage?.output_tokens).toBe(150);
     expect(Object.keys(st.result?.modelUsage)[0]).toBe("claude-sonnet-4-6");
+  });
+});
+
+describe("claude-cli non-zero exit (docs/13 C)", () => {
+  it("surfaces the result message and flags a limit so the retry loop waits instead of giving up", () => {
+    const out = '{"type":"result","subtype":"error","is_error":true,"duration_api_ms":0,"stop_reason":"stop_sequence","usage":{"input_tokens":0,"output_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":0}},"result":"You have hit your limit · resets 3am"}';
+    const err = exitError(1, out, "") as Error & { rateLimited?: boolean };
+    expect(err.message).toBe("claude exited 1: claude-cli: You have hit your limit · resets 3am");
+    expect(err.rateLimited).toBe(true);
+    const plain = exitError(1, "", "ENOENT: no such file") as Error & { rateLimited?: boolean };
+    expect(plain.message).toBe("claude exited 1: ENOENT: no such file");
+    expect(plain.rateLimited).toBeUndefined();
   });
 });

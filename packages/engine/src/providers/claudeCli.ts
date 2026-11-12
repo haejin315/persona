@@ -158,7 +158,7 @@ export class ClaudeCliProvider implements LLMProvider {
       child.on("close", (code) => {
         cleanup();
         if (code === 0) resolve(stdout);
-        else reject(new Error(`claude exited ${code}: ${stderr || stdout}`.slice(0, 500)));
+        else reject(exitError(code, stdout, stderr));
       });
       child.stdin.end(prompt, "utf8");
     });
@@ -280,6 +280,22 @@ function resultOf(json: any, model: string): Omit<GenerateResult, "latencyMs"> {
     model: `claude-cli:${canonical}`,
     usage: { promptTokens: fresh + cached, completionTokens: Number(u.output_tokens ?? 0), cachedPromptTokens: cached },
   };
+}
+
+/**
+ * A non-zero exit usually still prints a result JSON whose `result` says why ("You've hit your
+ * limit", "Prompt is too long"); surface that message, with the rate-limit flag, instead of the
+ * first 500 characters of the usage block (which hid a limit from the retry loop for 35 hours' worth
+ * of 5,000-turn judging).
+ */
+export function exitError(code: number | null, stdout: string, stderr: string): Error {
+  const json = parseResultJson(stdout);
+  if (json && (json.is_error || typeof json.result === "string")) {
+    const err = cliError(json);
+    err.message = `claude exited ${code}: ${err.message}`;
+    return err;
+  }
+  return new Error(`claude exited ${code}: ${stderr || stdout}`.slice(0, 500));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

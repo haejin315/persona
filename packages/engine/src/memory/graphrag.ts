@@ -87,6 +87,18 @@ export interface GraphRagOptions {
    * 3 names): a token shared by many names (얘기, 컵) is not a name.
    */
   maxTokenShare?: number;
+  /**
+   * Absolute ceiling on how many node names may share a token for it to link (round 8). The share
+   * rule scales with the graph: at 5,000 turns 2% of the names is ~200, so 소리 and 자리 linked
+   * every "원두 가는 소리" and "창가 자리" node and a reply had 50-180 seeds. Unset = share only.
+   */
+  maxTokenNames?: number;
+  /**
+   * At most this many seeds per retrieval (round 8), kept in the order of how surely the message
+   * means them: a whole name in the message, a token of a name in the message, a whole name in the
+   * carried context, a token in the context. Unset = every linked node seeds.
+   */
+  maxSeeds?: number;
   chunking?: ChunkOptions;
 }
 
@@ -157,7 +169,7 @@ export class GraphRag {
    * hubs - nodes on more than `maxHubShare` of all edges - which seed nothing and are crossed only
    * along one relation.
    */
-  private async seeds(message: string, ignore: Set<string>): Promise<{ seeds: string[]; hubs: string[] }> {
+  private async seeds(message: string, ignore: Set<string>, context: string[] = []): Promise<{ seeds: string[]; hubs: string[] }> {
     const nodes = await (this.names ??= this.opts.graph.entities());
     const totalEdges = nodes.reduce((a, n) => a + n.degree, 0) / 2;
     const hub = Math.max(10, (this.opts.maxHubShare ?? 0.1) * totalEdges);
@@ -167,12 +179,23 @@ export class GraphRag {
     // all seeds came from such tokens). Statistics over the graph's own names, not a word list.
     const tokenCount = new Map<string, number>();
     for (const n of nodes) for (const tok of new Set(n.name.split(/\s+/))) tokenCount.set(tok, (tokenCount.get(tok) ?? 0) + 1);
-    const maxTokenNames = Math.max(3, (this.opts.maxTokenShare ?? 0.02) * nodes.length);
-    const named = (name: string) =>
-      message.includes(name) ||
-      (tokens && name.split(/\s+/).some((tok) => tok.length >= 2 && tok !== name && (tokenCount.get(tok) ?? 0) <= maxTokenNames && message.includes(tok)));
+    const maxTokenNames = Math.min(Math.max(3, (this.opts.maxTokenShare ?? 0.02) * nodes.length), this.opts.maxTokenNames ?? Infinity);
+    const byToken = (name: string, text: string) => tokens && name.split(/\s+/).some((tok) => tok.length >= 2 && tok !== name && (tokenCount.get(tok) ?? 0) <= maxTokenNames && text.includes(tok));
+    const eligible = nodes.filter((n) => n.name.length >= 2 && !ignore.has(n.name) && n.degree <= hub);
+    // Tiers, surest first: whole name in the message, a token in the message, then the same in the
+    // carried context (the character's own last reply). With no cap the union is what rounds 2-7 had.
+    const ctx = context.join("\n");
+    const tiers = [
+      eligible.filter((n) => message.includes(n.name)),
+      eligible.filter((n) => byToken(n.name, message)),
+      eligible.filter((n) => ctx.includes(n.name)),
+      eligible.filter((n) => byToken(n.name, ctx)),
+    ];
+    const seeds: string[] = [];
+    const seen = new Set<string>();
+    for (const tier of tiers) for (const n of tier) if (!seen.has(n.name)) { seen.add(n.name); seeds.push(n.name); }
     return {
-      seeds: nodes.filter((n) => n.name.length >= 2 && !ignore.has(n.name) && n.degree <= hub && named(n.name)).map((n) => n.name),
+      seeds: this.opts.maxSeeds !== undefined ? seeds.slice(0, this.opts.maxSeeds) : seeds,
       hubs: nodes.filter((n) => n.degree > hub || ignore.has(n.name)).map((n) => n.name),
     };
   }
@@ -189,8 +212,7 @@ export class GraphRag {
     // Seeds come from the message and, when given, the context (round 5: the character's own last
     // reply - a name it brought up itself is what the next turn is about, t814/816). The vectors
     // are queried with the message alone.
-    const seedText = [message, ...(o.context ?? [])].join("\n");
-    const { seeds, hubs } = edgeLimit > 0 ? await this.seeds(seedText, ignore) : { seeds: [], hubs: [] };
+    const { seeds, hubs } = edgeLimit > 0 ? await this.seeds(message, ignore, o.context ?? []) : { seeds: [], hubs: [] };
     const mode = this.opts.query ?? "message";
     const queries = mode === "sentences" ? speechSentences(message) : mode === "speech" ? [speechOf(message)] : [message];
     if (!queries.length || !queries[0]) queries.splice(0, queries.length, message);

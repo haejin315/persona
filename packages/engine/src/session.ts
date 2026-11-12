@@ -58,6 +58,13 @@ export interface SessionOptions {
     render?: "v1" | "v2";
     /** Round 5: how many of the character's own latest replies also seed the graph (a name it brought up itself is what the next turn is about). Default 0. */
     carry?: number;
+    /**
+     * Round 8: how the "now" line is headed. "stand" (rounds 6-7) presents it as the present;
+     * "scene" presents it as where the last exchange ended and leaves it to the user's newest line
+     * whether that scene is still going - with a live user, "stand" froze a closing-time line into
+     * 4,500 turns of night phone calls (docs/13 C).
+     */
+    nowHeader?: "stand" | "scene";
   };
   model?: string;
   temperature?: number;
@@ -117,6 +124,7 @@ export class ChatSession {
   private knowledgeAt: "head" | "tail" = "head";
   private knowledgeRender: "v1" | "v2" = "v1";
   private knowledgeCarry = 0;
+  private nowHeader: "stand" | "scene" = "stand";
   private retrievalMeta?: NonNullable<Turn["meta"]>["retrieval"] & { lines: NonNullable<NonNullable<Turn["meta"]>["recalled"]> };
   private ingestedUpTo = -1;
   private rebuilding?: Promise<void>;
@@ -157,10 +165,11 @@ export class ChatSession {
       this.ownStore = !store;
     }
     if (opts.graphRag) {
-      const { at, render, carry, ...g } = opts.graphRag;
+      const { at, render, carry, nowHeader, ...g } = opts.graphRag;
       this.knowledgeAt = at ?? "head";
       this.knowledgeRender = render ?? "v1";
       this.knowledgeCarry = carry ?? 0;
+      this.nowHeader = nowHeader ?? "stand";
       this.graphRag = new GraphRag({
         ...g,
         embedder: g.embedder ?? localEmbedder(),
@@ -516,7 +525,11 @@ export class ChatSession {
     const rendered = renderGraphRag(r, this.turns.length, this.persona.name, { character: name, style: this.knowledgeRender });
     // The present as the summariser last read it (memory rules v8) heads the block, next to the
     // message - where round 4 showed the block is actually read.
-    const now = this.memory.now ? `## WHERE THINGS STAND (as of what you last took in; the last messages are more recent and win)\n${this.memory.now}` : "";
+    const now = this.memory.now
+      ? this.nowHeader === "scene"
+        ? `## WHERE THINGS LAST STOOD (the scene as of what you last took in - not necessarily now: ${this.persona.name}'s newest line says whether that scene is still going or time has passed - a greeting, daylight, the café again - and then that scene is over and this is a new one; the last messages win)\n${this.memory.now}`
+        : `## WHERE THINGS STAND (as of what you last took in; the last messages are more recent and win)\n${this.memory.now}`
+      : "";
     const block = [now, rendered].filter(Boolean).join("\n\n");
     this.knowledge = block || undefined;
     this.retrievalMeta = {

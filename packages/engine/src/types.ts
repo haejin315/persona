@@ -166,8 +166,11 @@ export interface ArchivedFact extends Fact {
    * The fact as subject → relation → object, for the knowledge graph (docs/14; memory rules v5).
    * `replaces` (rules v6) is the summariser's judgement that this changes what held before about
    * the same subject and relation (a new drink, a new home); only then is the old edge superseded.
+   * Rules v10 let it name what is replaced - the old object or the old relation - so only that
+   * edge is superseded, not every edge under a generic verb (민수 산다 망원동 had retired 민수 산다
+   * 펜탁스 ME, docs/13 C).
    */
-  triple?: { subject: string; relation: string; object: string; replaces?: boolean };
+  triple?: { subject: string; relation: string; object: string; replaces?: boolean | string };
 }
 
 /** Accept a stored fact in either shape (old recordings hold plain strings). */
