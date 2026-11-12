@@ -93,6 +93,8 @@ npm run eval -- all packages/eval/experiments/long-run-1000-graphrag6.json # 13 
 npm run eval -- all packages/eval/experiments/long-run-1000-graphrag7.json # 13 7차: 시계 없는 지금(v9) · 한 문장(v9b)
 npx tsx scripts/extend-scenario.ts --from haru-ko-1000 --to 5000               # 12 C: 5,000턴 시나리오 생성(opus 비트 + 기계 배치 프로브, ~20분)
 npm run eval -- all packages/eval/experiments/long-run-5000.json           # 12 C: 5,000턴, 25칸 기준선 vs 10칸 + Graph RAG (~30시간)
+npx tsx scripts/graphrag-replay.ts eval-results/long-run-5000/conversations/<기록>.json --sample 60  # 13 8차: 실행이 남긴 저장소 위에서 다른 옵션으로 검색만 다시(프로브 히트·시드·ms)
+npm run eval -- all packages/eval/experiments/long-run-1000-graphrag8.json # 13 8차: 라이브 시뮬레이터, 7차 설정 vs v10 + scene 머리글 + maxSeeds 16
 
 npm run eval -- regen  eval-results/prompt-version                         # 재생성 사유 분류만 다시 (--rules-only: 규칙만 재계산)
 npm run eval -- safety eval-results/safety                                 # 안전 감사만 다시
