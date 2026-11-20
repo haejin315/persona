@@ -282,6 +282,23 @@ describe("user simulator prompt", () => {
     await sim.next(1, [], "하루");
     expect(seen[0]).toContain("ONE continuous meeting");
     expect(seen[0]).toContain("Never jump to a later time or another day");
+    expect(seen[0]).not.toContain("series of visits");
+  });
+
+  it("round 9: with time 'visits' the simulated user opens a new visit on a beat's first turn and stays in it afterwards", async () => {
+    const { UserSimulator } = await import("./simulator.js");
+    const seen: string[] = [];
+    const provider = { id: "fake", generate: async (messages: { role: string; content: string }[]) => { seen.push(messages[0]!.content); return { text: "안녕하세요.", model: "fake" }; } };
+    const scenario = findScenario("haru-ko");
+    const sim = new UserSimulator(provider as never, scenario, "fake", { time: "visits" });
+    const second = scenario.beats[1]!.fromUserTurn;
+    await sim.next(second, [], "하루");
+    await sim.next(second + 1, [], "하루");
+    expect(seen[0]).toContain("THIS MESSAGE OPENS A NEW VISIT");
+    expect(seen[0]).toContain("do not continue the previous visit's last exchange");
+    expect(seen[1]).toContain("Within a visit it is ONE continuous meeting");
+    expect(seen[1]).not.toContain("OPENS A NEW VISIT");
+    expect(seen[1]).toContain("the next goal will open a new visit");
   });
 });
 

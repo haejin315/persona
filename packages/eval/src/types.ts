@@ -117,6 +117,12 @@ export interface RunConfig {
   userTurns: number;
   /** Simulated-user model spec; defaults to the arm's model. */
   simulatorModel?: string;
+  /**
+   * Round 9: how the simulated user treats time. "continuous" (default) is one meeting for the
+   * whole conversation; "visits" opens a new visit on a later day at every beat (the user comes
+   * in and greets), which is what the long scenarios describe.
+   */
+  userTime?: "continuous" | "visits";
   memoryModel?: string;
   /** Repeat each (scenario, arm) this many times to average out sampling noise. */
   repeats: number;

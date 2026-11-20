@@ -112,7 +112,7 @@ export async function drain<T>(gen: AsyncGenerator<string, T>): Promise<T> {
 export async function runConversation(
   scenario: Scenario,
   arm: Arm,
-  cfg: Pick<RunConfig, "userTurns" | "simulatorModel" | "memoryModel">,
+  cfg: Pick<RunConfig, "userTurns" | "simulatorModel" | "memoryModel" | "userTime">,
   repeat = 0,
   hooks: RunHooks = {},
   ctx: RunContext = {},
@@ -172,7 +172,7 @@ export async function runConversation(
   } else {
     if (ctx.replay && !ctx.replay.isSourceArm(arm.id)) throw new Error(`replayFrom: no recording for scenario ${scenario.id} to replay into arm ${arm.id}`);
     const sim = cfg.simulatorModel ? resolveProvider(cfg.simulatorModel) : chat;
-    user = new UserSimulator(track(sim.provider, "simulator"), scenario, sim.model);
+    user = new UserSimulator(track(sim.provider, "simulator"), scenario, sim.model, { time: cfg.userTime });
   }
 
   const name = card.name[scenario.lang] ?? card.id;

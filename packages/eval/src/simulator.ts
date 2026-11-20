@@ -26,8 +26,14 @@ export class UserSimulator implements UserSource {
     private provider: LLMProvider,
     private scenario: Scenario,
     private model?: string,
-    /** `probeText` replaces the recall-probe instruction (world probes: the user does not know the answer). */
-    private opts: { probeText?: (probe: Scenario["probes"][number]) => string } = {},
+    /**
+     * `probeText` replaces the recall-probe instruction (world probes: the user does not know the answer).
+     * `time` (round 9): "continuous" (default) tells the user the whole conversation is one meeting;
+     * "visits" makes each beat a visit on a later day, opened with a greeting on the beat's first
+     * turn. Long scenarios span months of visits, and a user who can never leave kept the
+     * character in a closing scene for hundreds of turns (docs/14 결과 8).
+     */
+    private opts: { probeText?: (probe: Scenario["probes"][number]) => string; time?: "continuous" | "visits" } = {},
   ) {}
 
   currentBeat(userTurn: number) {
@@ -39,6 +45,16 @@ export class UserSimulator implements UserSource {
 
   probeAt(userTurn: number) {
     return this.scenario.probes.find((p) => p.atUserTurn === userTurn);
+  }
+
+  /** The time rule for this turn (see `opts.time`). */
+  timeText(beat: Scenario["beats"][number], userTurn: number): string {
+    if (this.opts.time !== "visits")
+      return "Time: this whole conversation is ONE continuous meeting at one place. Never jump to a later time or another day, and never narrate what happens after you leave. If your goals are done and you have said goodbye, write only a short closing line.";
+    const opening = beat.fromUserTurn === userTurn;
+    return opening
+      ? "Time: this story is a series of visits to the same place, one visit per goal. THIS MESSAGE OPENS A NEW VISIT: time has passed since the last one (a later day; the goal says how much when it does). Come in and greet as you would on arriving, mention the day or the season naturally if it has moved on, and do not continue the previous visit's last exchange."
+      : "Time: this story is a series of visits to the same place, one visit per goal. Within a visit it is ONE continuous meeting: never jump to a later time or another day, and never narrate what happens after you leave. If your goals are done and you have said goodbye, write only a short closing line; the next goal will open a new visit.";
   }
 
   async next(userTurn: number, recent: Turn[], characterName: string): Promise<UserMessage> {
@@ -60,7 +76,7 @@ Format: actions and narration between asterisks *...*, spoken words in ${s.lang 
 Current goal: ${beat.goal}
 ${beat.reveal.length ? `Work these facts about yourself into the conversation naturally if you haven't already (do not list them):\n${beat.reveal.map((r) => `- ${r}`).join("\n")}` : ""}
 ${probe ? this.opts.probeText?.(probe) ?? `\nIMPORTANT for this message: ${probe.ask} Ask it in character, casually, without hinting at the answer. The question must be specific enough that the only correct answer is "${probe.expected}" (never say it yourself). You must have told ${characterName} this fact earlier; if you have not, state it plainly in this message instead of asking.` : ""}
-Time: this whole conversation is ONE continuous meeting at one place. Never jump to a later time or another day, and never narrate what happens after you leave. If your goals are done and you have said goodbye, write only a short closing line.
+${this.timeText(beat, userTurn)}
 Do not break character. Do not summarise. Do not add meta commentary.`;
 
     const messages: ChatMessage[] = [
