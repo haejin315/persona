@@ -187,6 +187,17 @@ export class ChatSession {
 
   /** The character's scripted first message, pushed as a turn. */
   open(): Turn {
+    // A new conversation starts on an empty namespace. Both stores are keyed by `ns`, and a caller
+    // that reuses one (an eval arm run again under the same id) would otherwise read the previous
+    // conversation's facts and edges until something rebuilt the stores - round 9 (docs/14) ran its
+    // first 540/560 user turns on round 8's graph (80% of graph lines foreign) before the resume
+    // called restore(), which does rebuild. Awaited before the first retrieval, like restore().
+    if (this.graphRag) {
+      const g = this.graphRag;
+      this.knowledge = undefined;
+      this.ingestedUpTo = -1;
+      this.rebuilding = g.clear();
+    }
     const raw =
       this.card.scenario.firstMessage[this.lang] ?? this.card.scenario.firstMessage.ko ?? "";
     return this.push("character", fillUser(raw, this.persona), {

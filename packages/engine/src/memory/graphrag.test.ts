@@ -329,6 +329,38 @@ describe("Graph RAG memory (docs/14)", () => {
     expect(m.edges.every((e, i) => i === 0 || (e.score ?? 0) <= (m.edges[0]!.score ?? 0))).toBe(true);
   });
 
+  it("round 9: open() clears the namespace, so a new conversation never reads an earlier one's facts and edges", async () => {
+    let prompt: string[] = [];
+    const provider: LLMProvider = {
+      id: "fake",
+      defaultModel: "fake-1",
+      async generate(messages) {
+        prompt = messages.map((m) => `${m.role}/${m.kind ?? "-"}: ${m.content}`);
+        return { text: '"음, 처음 듣는 이름이에요."', model: "fake-1", latencyMs: 1 };
+      },
+      async *stream() {
+        yield '"음."';
+      },
+    };
+    const vectors = new MemoryVectorIndex();
+    const graph = new MemoryGraph();
+    const embedder = bigramEmbedder(256);
+    // An earlier conversation left its facts, edges and chunks under the same namespace.
+    const earlier = new GraphRag({ ns: "reused", embedder, vectors, graph });
+    await earlier.ingestFacts([{ text: "보리는 하늘 동물병원에 다닌다", source: "user", turnFrom: 1, turnTo: 1, entities: ["보리", "하늘 동물병원"], triple: { subject: "보리", relation: "다닌다", object: "하늘 동물병원" } }]);
+    await earlier.ingestTurns([{ role: "user", content: '"보리는 하늘 동물병원에 다녀요."', index: 1 }, { role: "character", content: '"하늘 동물병원이요."', index: 2 }], 0, 2);
+    expect((await graph.neighborhood(["보리"], { hops: 1, limit: 10 })).length).toBe(1);
+    const haru = cards.find((c) => c.id === "haru")!;
+    const s = new ChatSession({ card: haru, lang: "ko", provider, promptVersion: "v13-structured", memory: { enabled: false }, graphRag: { ns: "reused", embedder, vectors, graph } });
+    s.open();
+    const reply = await s.send('"보리 병원 이름 기억하세요?"');
+    expect((await graph.neighborhood(["보리"], { hops: 1, limit: 10 })).length).toBe(0);
+    expect(prompt.join("\n")).not.toContain("하늘 동물병원");
+    expect(reply.meta?.retrieval?.edges ?? 0).toBe(0);
+    expect(reply.meta?.recalled ?? []).toHaveLength(0);
+    s.close();
+  });
+
   it("a session with graphRag shows the retrieved block as a context message and records the retrieval on the reply", async () => {
     let prompt: string[] = [];
     const provider: LLMProvider = {
